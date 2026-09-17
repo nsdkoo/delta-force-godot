@@ -431,9 +431,16 @@ func _restart() -> void:
 	get_tree().reload_current_scene()
 
 # ============================================================ UI 工具
-func _make_panel(title: String, subtitle: String, w: float, h: float) -> PanelContainer:
+## 造一块面板。
+##
+## 这里必须是 Panel 而不是 PanelContainer：PanelContainer 是容器，它在布局时会
+## 把每一个直接子节点都 fit 进自己的内容矩形，于是调用方写下的
+## `label.position = Vector2(30, 30)`、`box.position = Vector2(30, 110)` 全部作废 ——
+## 选举面板里标题、候选人列表、参选按钮会被压到同一个位置上。
+## 这些面板要的是"绝对定位 + 一个边框底"，用 Panel 就对了。
+func _make_panel(title: String, subtitle: String, w: float, h: float) -> Panel:
 	var vp := get_viewport().get_visible_rect().size
-	var panel := PanelContainer.new()
+	var panel := Panel.new()
 	panel.position = (vp - Vector2(w, h)) * 0.5
 	panel.size = Vector2(w, h)
 	panel.custom_minimum_size = Vector2(w, h)
