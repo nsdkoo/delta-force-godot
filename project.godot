@@ -28,6 +28,10 @@ AudioManager="*res://autoload/audio_manager.gd"
 
 window/size/viewport_width=1600
 window/size/viewport_height=900
+# 实际显示窗口缩小到 700x394（与 1600x900 同比例 16:9）。
+# 逻辑分辨率不变，所以 UI 布局与坐标计算都不受影响，只是看到的东西小一圈。
+window/size/window_width_override=700
+window/size/window_height_override=394
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/vsync/vsync_mode=1
