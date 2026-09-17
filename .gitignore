@@ -1,0 +1,23 @@
+# Godot 4 导入缓存与中间产物（体积大、可重建，不入库）
+.godot/
+
+# Godot 导出配置（含本机路径，不应共享）
+export.cfg
+export_presets.cfg
+
+# 开发期截图
+_shots/
+
+# 地形烘焙的中间预览图（成品在 assets/terrain/）
+_bake_preview.jpg
+_bake_full.jpg
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 烘焙中间产物的导入配置
+_bake_preview.jpg.import
+_bake_full.jpg.import
+_tex_preview.jpg.import

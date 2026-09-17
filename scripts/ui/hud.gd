@@ -1,0 +1,406 @@
+extends CanvasLayer
+class_name HUD
+## ============================================================================
+## HUD · 战场界面
+## ----------------------------------------------------------------------------
+## 纯 Control 自绘（无 .tscn），监听 EventBus 获取事件，每帧读取 MatchState。
+## 中文用 SystemFont（Godot 内置字体不含 CJK）。
+## ============================================================================
+
+var font: SystemFont
+var font_bold: SystemFont
+var layer_root: Control
+var battle: BattleManager = null
+
+# 事件驱动的瞬时状态
+var feed_items: Array = []          ## {"text","color","t"}
+var banner_text := ""
+var banner_color := Color.WHITE
+var banner_time := 0.0
+var toast_text := ""
+var toast_color := Color.WHITE
+var toast_time := 0.0
+var hitmarker := 0.0
+var hitmarker_lethal := false
+var hurt_flash := 0.0
+var hurt_dir := 0.0
+var hurt_dir_time := 0.0
+var streak := 0
+var uav := 0.0
+var support_kind := ""
+
+const FEED_MAX := 6
+const BANNER_DUR := 3.2
+const TOAST_DUR := 2.6
+
+func _ready() -> void:
+	layer = 10
+	font = SystemFont.new()
+	font.font_names = PackedStringArray(["Microsoft YaHei", "微软雅黑", "SimHei", "Noto Sans CJK SC", "sans-serif"])
+	font_bold = SystemFont.new()
+	font_bold.font_names = font.font_names
+	font_bold.font_weight = 700
+	layer_root = Control.new()
+	layer_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(layer_root)
+	layer_root.draw.connect(_draw_hud)
+	_connect_bus()
+
+func _connect_bus() -> void:
+	EventBus.kill_feed.connect(_on_feed)
+	EventBus.feed.connect(_on_feed)
+	EventBus.banner.connect(_on_banner)
+	EventBus.toast.connect(_on_toast)
+	EventBus.hitmarker.connect(_on_hitmarker)
+	EventBus.player_hurt.connect(_on_hurt)
+	EventBus.player_streak_changed.connect(func(s): streak = s)
+	EventBus.player_uav.connect(func(t): uav = t)
+	EventBus.support_ready.connect(_on_support_ready)
+	EventBus.support_used.connect(func(_k, _p): support_kind = "")
+	EventBus.objective_changed.connect(func(_t): pass)
+
+func _on_feed(text: String, color: Color) -> void:
+	feed_items.append({"text": text, "color": color,
+		"t": Time.get_ticks_msec() / 1000.0})
+	if feed_items.size() > FEED_MAX:
+		feed_items.pop_front()
+
+func _on_banner(text: String, color: Color, dur: float) -> void:
+	banner_text = text
+	banner_color = color
+	banner_time = dur if dur > 0.0 else BANNER_DUR
+
+func _on_toast(text: String, color: Color) -> void:
+	toast_text = text
+	toast_color = color
+	toast_time = TOAST_DUR
+
+func _on_hitmarker(_head: bool, lethal: bool, _dmg: float) -> void:
+	hitmarker = 0.35
+	hitmarker_lethal = lethal
+
+func _on_hurt(dir: float, intensity: float) -> void:
+	hurt_flash = minf(1.0, hurt_flash + intensity)
+	hurt_dir = dir
+	hurt_dir_time = 1.5
+
+func _on_support_ready(kind: String) -> void:
+	support_kind = kind
+
+func _process(delta: float) -> void:
+	var now := Time.get_ticks_msec() / 1000.0
+	for i in range(feed_items.size() - 1, -1, -1):
+		if now - feed_items[i]["t"] > 7.5:
+			feed_items.remove_at(i)
+	if banner_time > 0.0:
+		banner_time -= delta
+	if toast_time > 0.0:
+		toast_time -= delta
+	if hitmarker > 0.0:
+		hitmarker -= delta
+	if hurt_flash > 0.0:
+		hurt_flash = maxf(0.0, hurt_flash - delta * 1.7)
+	if hurt_dir_time > 0.0:
+		hurt_dir_time -= delta
+	if uav > 0.0:
+		uav = maxf(0.0, uav - delta)
+	layer_root.queue_redraw()
+
+# ============================================================ 绘制
+func _draw_hud() -> void:
+	var vp := layer_root.get_viewport_rect().size
+	var player: Soldier = TeamManager.player
+	if not MatchState.match_active and MatchState.phase != GameConfig.Phase.RESULT:
+		return
+	# 暗角
+	_draw_vignette(vp)
+	_draw_tickets(vp)
+	_draw_captures(vp)
+	_draw_feed()
+	if player != null and is_instance_valid(player):
+		_draw_squad(vp, player)
+		_draw_weapon(vp, player)
+		_draw_minimap(vp, player)
+		_draw_crosshair(vp, player)
+		if not player.alive:
+			_draw_death(vp, player)
+	_draw_banner(vp)
+	_draw_toast(vp)
+	_draw_hurt(vp)
+
+func _draw_vignette(vp: Vector2) -> void:
+	# 用四条渐隐边框模拟暗角（draw_rect 不支持渐变，用多层近似）
+	var layers := 5
+	for i in layers:
+		var k := float(i) / float(layers)
+		var inset := k * 40.0
+		var a := 0.055 * (1.0 - k)
+		layer_root.draw_rect(Rect2(0, 0, vp.x, inset), Color(0.05, 0.03, 0.01, a), true)
+		layer_root.draw_rect(Rect2(0, vp.y - inset, vp.x, inset), Color(0.05, 0.03, 0.01, a), true)
+		layer_root.draw_rect(Rect2(0, 0, inset, vp.y), Color(0.05, 0.03, 0.01, a), true)
+		layer_root.draw_rect(Rect2(vp.x - inset, 0, inset, vp.y), Color(0.05, 0.03, 0.01, a), true)
+
+func _panel(r: Rect2, alpha: float = 0.68) -> void:
+	layer_root.draw_rect(r, Color(0.03, 0.05, 0.06, alpha), true)
+	layer_root.draw_rect(r, Color(0.47, 0.71, 0.86, 0.22), false, 1.0)
+
+func _draw_tickets(vp: Vector2) -> void:
+	var w := minf(560.0, vp.x * 0.5)
+	var x := (vp.x - w) * 0.5
+	var y := 14.0
+	_panel(Rect2(x - 10, y - 8, w + 20, 52))
+	var half := w * 0.5 - 6.0
+	# 条底
+	layer_root.draw_rect(Rect2(x, y, w, 12), Color(1, 1, 1, 0.08), true)
+	# 攻方（左）/守方（右）
+	var k0 := clampf(float(MatchState.tickets[0]) / float(GameConfig.TICKET_MAX[0]), 0.0, 1.0)
+	var k1 := clampf(float(MatchState.tickets[1]) / float(GameConfig.TICKET_MAX[1]), 0.0, 1.0)
+	layer_root.draw_rect(Rect2(x, y, half * k0, 12), GameConfig.TEAM_COLOR[0], true)
+	layer_root.draw_rect(Rect2(x + w - half * k1, y, half * k1, 12), GameConfig.TEAM_COLOR[1], true)
+	layer_root.draw_rect(Rect2(x + w * 0.5 - 3, y - 4, 6, 20), Color(0.03, 0.05, 0.06, 0.9), true)
+	# 文本
+	layer_root.draw_string(font_bold, Vector2(x + 4, y + 36), "GTI  %d" % MatchState.tickets[0],
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 18, GameConfig.TEAM_COLOR[0])
+	layer_root.draw_string(font_bold, Vector2(x + w - 130, y + 36), "哈夫克  %d" % MatchState.tickets[1],
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 18, GameConfig.TEAM_COLOR[1])
+	layer_root.draw_string(font, Vector2(x + w * 0.5 - 26, y + 36), MatchState.time_string(),
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.81, 0.88, 0.93))
+
+func _draw_captures(vp: Vector2) -> void:
+	var n := GameConfig.CAPTURES.size()
+	var cw := 52.0
+	var gap := 6.0
+	var total := n * cw + (n - 1) * gap
+	var x := (vp.x - total) * 0.5
+	var y := 74.0
+	for c in GameConfig.CAPTURES:
+		var st: Dictionary = MatchState.captures[c["id"]]
+		var own: bool = st["owner"] == GameConfig.Team.GTI
+		var col: Color = GameConfig.TEAM_COLOR[0] if own else GameConfig.TEAM_COLOR[1]
+		var r := Rect2(x, y, cw, 30)
+		layer_root.draw_rect(r, Color(0.03, 0.05, 0.06, 0.7), true)
+		# 进度填充（从下往上）
+		var prog: float = st["progress"] / 100.0
+		if prog > 0.001:
+			layer_root.draw_rect(Rect2(x + 2, y + 28 - 26 * prog, cw - 4, 26 * prog),
+				Color(1.0, 0.82, 0.29, 0.45), true)
+		layer_root.draw_rect(r, col, false, 2.0)
+		if st["contested"]:
+			layer_root.draw_rect(r.grow(2.0), Color(1.0, 0.82, 0.29, 0.9), false, 2.0)
+		layer_root.draw_string(font_bold, Vector2(x + 16, y + 21), c["id"],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 15, col)
+		x += cw + gap
+	var seg := clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)
+	layer_root.draw_string(font, Vector2((vp.x - 260) * 0.5, y + 48),
+		"当前目标区域：" + GameConfig.SEGMENTS[seg]["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
+		Color(0.5, 0.59, 0.66))
+
+func _draw_feed() -> void:
+	var y := 150.0
+	for item in feed_items:
+		var age: float = Time.get_ticks_msec() / 1000.0 - item["t"]
+		var a := clampf(1.0 - age / 7.5, 0.12, 1.0)
+		var col: Color = item["color"]
+		layer_root.draw_rect(Rect2(10, y - 14, 420, 21), Color(0.03, 0.05, 0.06, 0.5 * a), true)
+		layer_root.draw_rect(Rect2(10, y - 14, 3, 21), Color(col.r, col.g, col.b, a), true)
+		layer_root.draw_string(font, Vector2(20, y + 1), item["text"],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(col.r, col.g, col.b, a))
+		y += 24.0
+
+func _draw_squad(vp: Vector2, player: Soldier) -> void:
+	var sq: Squad = TeamManager.squad_of(player)
+	if sq == null:
+		return
+	var w := 250.0
+	var h := 26.0 + sq.members.size() * 30.0
+	var x := 14.0
+	var y := vp.y - h - 14.0
+	_panel(Rect2(x, y, w, h))
+	var team_cn: String = GameConfig.TEAM_ROLE[player.team]
+	layer_root.draw_string(font_bold, Vector2(x + 10, y + 20),
+		"第 %d 小队 · %s" % [sq.id % 5 + 1, team_cn], HORIZONTAL_ALIGNMENT_LEFT, -1, 12,
+		Color(0.56, 0.64, 0.7))
+	if sq.order_kind >= 0:
+		layer_root.draw_string(font, Vector2(x + 140, y + 20), sq.order_label,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, GameConfig.ORDER_INFO[sq.order_kind]["color"])
+	var oy := y + 34.0
+	for m in sq.members:
+		if not is_instance_valid(m):
+			continue
+		var col: Color = GameConfig.OPERATORS[m.op_class]["color"]
+		if not m.alive:
+			col = Color(0.36, 0.42, 0.47)
+		layer_root.draw_circle(Vector2(x + 18, oy), 5.0, col)
+		var label: String = ("你" if m.is_player else m.unit_name) + " · " + GameConfig.CLASS_NAME_CN[m.op_class]
+		layer_root.draw_string(font, Vector2(x + 30, oy + 5), label,
+			HORIZONTAL_ALIGNMENT_LEFT, 180, 12, Color(0.84, 0.9, 0.94))
+		var k := clampf(m.hp / m.max_hp, 0.0, 1.0)
+		layer_root.draw_rect(Rect2(x + 30, oy + 9, 190, 4), Color(0, 0, 0, 0.5), true)
+		var hc := Color("#57e08a")
+		if k < 0.3:
+			hc = Color("#ff5b4a")
+		elif k < 0.6:
+			hc = Color("#ffd24a")
+		layer_root.draw_rect(Rect2(x + 30, oy + 9, 190 * k, 4), hc, true)
+		oy += 30.0
+
+func _draw_weapon(vp: Vector2, player: Soldier) -> void:
+	var w := 262.0
+	var h := 118.0
+	var x := vp.x - w - 14.0
+	var y := vp.y - h - 14.0
+	_panel(Rect2(x, y, w, h))
+	layer_root.draw_string(font_bold, Vector2(x + 12, y + 26), player.weapon["name"],
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.92, 0.95, 0.97))
+	if player.is_reloading:
+		layer_root.draw_string(font, Vector2(x + 12, y + 48),
+			"换弹中… %.1fs" % player.reload_left, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#ffd24a"))
+	else:
+		layer_root.draw_string(font, Vector2(x + 12, y + 48),
+			"弹匣 %d / %d    备弹 %d" % [player.ammo, player.weapon["mag"], player.reserve],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.62, 0.7, 0.76))
+	var sk_ready := player.skill_cd <= 0.0
+	var sk_col: Color = GameConfig.OPERATORS[player.op_class]["color"] if sk_ready else Color(0.36, 0.42, 0.47)
+	layer_root.draw_string(font, Vector2(x + 12, y + 70),
+		"[Q] %s%s" % [GameConfig.OPERATORS[player.op_class]["skill"],
+			"  就绪" if sk_ready else "  冷却 %.1fs" % player.skill_cd],
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, sk_col)
+	layer_root.draw_string(font, Vector2(x + 12, y + 90),
+		"[E] 野战急救%s" % ("  就绪" if player.field_med_cd <= 0.0 else "  冷却 %.1fs" % player.field_med_cd),
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
+		Color(0.62, 0.7, 0.76) if player.field_med_cd <= 0.0 else Color(0.36, 0.42, 0.47))
+	var k := clampf(player.hp / player.max_hp, 0.0, 1.0)
+	layer_root.draw_rect(Rect2(x + 12, y + 98, 238, 8), Color(0, 0, 0, 0.5), true)
+	var hc := Color("#57e08a")
+	if k < 0.25:
+		hc = Color("#ff5b4a")
+	elif k < 0.5:
+		hc = Color("#ffd24a")
+	layer_root.draw_rect(Rect2(x + 12, y + 98, 238 * k, 8), hc, true)
+
+func _draw_minimap(vp: Vector2, player: Soldier) -> void:
+	var mw := 216.0
+	var mh := 150.0
+	var x := vp.x - mw - 14.0
+	var y := vp.y - mh - 150.0
+	_panel(Rect2(x, y, mw, mh), 0.75)
+	var sx := mw / GameConfig.WORLD_SIZE.x
+	var sy := mh / GameConfig.WORLD_SIZE.y
+	# 建筑
+	for b in _map_buildings():
+		var r: Rect2 = b["rect"]
+		layer_root.draw_rect(Rect2(x + r.position.x * sx, y + r.position.y * sy,
+			maxf(1.0, r.size.x * sx * 1.4), maxf(1.0, r.size.y * sy * 1.4)),
+			Color(0.16, 0.14, 0.11, 0.55), true)
+	# 据点
+	for c in GameConfig.CAPTURES:
+		var st: Dictionary = MatchState.captures[c["id"]]
+		var own: bool = st["owner"] == GameConfig.Team.GTI
+		var col: Color = GameConfig.TEAM_COLOR[0] if own else GameConfig.TEAM_COLOR[1]
+		var p: Vector2 = c["pos"]
+		layer_root.draw_circle(Vector2(x + p.x * sx, y + p.y * sy), 8.0,
+			Color(col.r, col.g, col.b, 0.45))
+		layer_root.draw_arc(Vector2(x + p.x * sx, y + p.y * sy), 8.0, 0, TAU, 16, col, 1.5)
+		layer_root.draw_string(font_bold, Vector2(x + p.x * sx - 7, y + p.y * sy + 4), c["id"],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, col)
+	# 单位
+	for u in TeamManager.alive_units():
+		var is_visible: bool = u.team == player.team or uav > 0.0 or _is_spotted(u)
+		if not is_visible:
+			continue
+		var up := Vector2(x + u.global_position.x * sx, y + u.global_position.y * sy)
+		var c2: Color = GameConfig.TEAM_COLOR[u.team]
+		if u.is_player:
+			c2 = Color("#ffd24a")
+		layer_root.draw_circle(up, 2.6 if u.is_player else 1.9, c2)
+	# 视野框
+	var cam := player.get_viewport().get_camera_2d()
+	if cam != null:
+		var vs := player.get_viewport_rect().size
+		var cam_rect := Rect2(cam.global_position - vs * 0.5, vs)
+		layer_root.draw_rect(Rect2(x + cam_rect.position.x * sx, y + cam_rect.position.y * sy,
+			cam_rect.size.x * sx, cam_rect.size.y * sy), Color(1, 1, 1, 0.28), false, 1.0)
+	layer_root.draw_string(font, Vector2(x + 4, y + mh - 5), "烬区 · 20v20", HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
+		Color(0.5, 0.59, 0.66))
+
+func _is_spotted(u: Soldier) -> bool:
+	if not u.has_meta("spotted_until"):
+		return false
+	return u.get_meta("spotted_until") > Time.get_ticks_msec() / 1000.0
+
+func _map_buildings() -> Array:
+	var m = get_tree().get_first_node_in_group("world_map")
+	if m != null and "buildings" in m:
+		return m.buildings
+	return []
+
+func _draw_crosshair(vp: Vector2, player: Soldier) -> void:
+	if not player.alive:
+		return
+	var c := vp * 0.5
+	var spread := 16.0 + player.spread_heat * 22.0
+	if player.aiming_down_sight:
+		spread -= 8.0
+	layer_root.draw_line(c + Vector2(-spread, 0), c + Vector2(-5, 0), Color(1, 1, 1, 0.85), 2.0)
+	layer_root.draw_line(c + Vector2(5, 0), c + Vector2(spread, 0), Color(1, 1, 1, 0.85), 2.0)
+	layer_root.draw_line(c + Vector2(0, -spread), c + Vector2(0, -5), Color(1, 1, 1, 0.85), 2.0)
+	layer_root.draw_line(c + Vector2(0, 5), c + Vector2(0, spread), Color(1, 1, 1, 0.85), 2.0)
+	if player.aiming_down_sight:
+		layer_root.draw_arc(c, 7.0, 0, TAU, 20, Color(1, 0.82, 0.29, 0.5), 1.4)
+	if hitmarker > 0.0:
+		var col := Color(1, 0.35, 0.24, clampf(hitmarker * 3.0, 0.0, 1.0))
+		var s := 12.0
+		layer_root.draw_line(c + Vector2(-s, -s), c + Vector2(-4, -4), col, 3.0)
+		layer_root.draw_line(c + Vector2(s, -s), c + Vector2(4, -4), col, 3.0)
+		layer_root.draw_line(c + Vector2(-s, s), c + Vector2(-4, 4), col, 3.0)
+		layer_root.draw_line(c + Vector2(s, s), c + Vector2(4, 4), col, 3.0)
+
+func _draw_death(vp: Vector2, player: Soldier) -> void:
+	layer_root.draw_rect(Rect2(0, vp.y * 0.5 - 70, vp.x, 140), Color(0.03, 0.05, 0.06, 0.55), true)
+	layer_root.draw_string(font_bold, Vector2(vp.x * 0.5 - 60, vp.y * 0.5 - 8), "阵 亡",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 44, Color("#ff8a7a"))
+	layer_root.draw_string(font, Vector2(vp.x * 0.5 - 140, vp.y * 0.5 + 26),
+		"重生倒计时 %.1fs · 将在己方控制区重新部署" % maxf(0.0, player.respawn_timer),
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.81, 0.88, 0.93))
+	layer_root.draw_string(font, Vector2(vp.x * 0.5 - 110, vp.y * 0.5 + 50),
+		"票数 -1 · 阵亡会消耗阵营票数", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.5, 0.59, 0.66))
+
+func _draw_banner(vp: Vector2) -> void:
+	if banner_time <= 0.0 or banner_text == "":
+		return
+	var a := clampf(banner_time / 0.6, 0.0, 1.0)
+	var w := 640.0
+	var r := Rect2((vp.x - w) * 0.5, vp.y * 0.19, w, 54)
+	layer_root.draw_rect(r, Color(0.03, 0.05, 0.06, 0.84 * a), true)
+	layer_root.draw_rect(r, Color(banner_color.r, banner_color.g, banner_color.b, a), false, 2.0)
+	layer_root.draw_string(font_bold, Vector2(r.position.x + 26, r.position.y + 37), banner_text,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 28, Color(banner_color.r, banner_color.g, banner_color.b, a))
+
+func _draw_toast(vp: Vector2) -> void:
+	if toast_time <= 0.0 or toast_text == "":
+		return
+	var a := clampf(toast_time / 0.5, 0.0, 1.0)
+	var w := 420.0
+	var r := Rect2((vp.x - w) * 0.5, vp.y - 150.0, w, 32)
+	layer_root.draw_rect(r, Color(0.03, 0.05, 0.06, 0.8 * a), true)
+	layer_root.draw_rect(r, Color(toast_color.r, toast_color.g, toast_color.b, 0.8 * a), false, 1.5)
+	layer_root.draw_string(font_bold, Vector2(r.position.x + 14, r.position.y + 22), toast_text,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(toast_color.r, toast_color.g, toast_color.b, a))
+	if support_kind != "":
+		var t := "支援就绪 · 按 X 呼叫"
+		layer_root.draw_string(font_bold, Vector2(vp.x * 0.5 - 80, r.position.y - 12), t,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#ffd24a"))
+
+func _draw_hurt(vp: Vector2) -> void:
+	if hurt_flash > 0.0:
+		layer_root.draw_rect(Rect2(0, 0, vp.x, vp.y), Color(0.67, 0.07, 0.07, hurt_flash * 0.42), true)
+	if hurt_dir_time > 0.0:
+		var c := vp * 0.5
+		var dir := Vector2(cos(hurt_dir), sin(hurt_dir))
+		var a := clampf(hurt_dir_time / 0.7, 0.0, 1.0)
+		var pts := PackedVector2Array([
+			c + dir * 96.0,
+			c + dir.rotated(0.22) * 142.0,
+			c + dir.rotated(-0.22) * 142.0])
+		layer_root.draw_colored_polygon(pts, Color(1.0, 0.36, 0.29, a * 0.85))
