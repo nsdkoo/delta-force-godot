@@ -18,6 +18,7 @@ var rig: RenderRig
 var ground: Sprite2D
 var obstacles: StaticBody2D
 var units_root: Node2D
+var props_root: Node2D
 var projectiles_root: Node2D
 var fx_layer: Node2D
 var camera: Camera2D
@@ -29,6 +30,10 @@ var tracks: Array = []             ## {"from": Vector2, "to": Vector2}
 var stains: Array = []             ## {"kind": String, "pos": Vector2, "rot": float, "size": float}
 var nav_grid: AStarGrid2D
 var rng := RandomNumberGenerator.new()
+## 卡通地景（纯装饰，不参与碰撞/导航/视线）
+var _patches: Array = []           ## {"pts","color","alpha"} 地表色块
+var _tufts: Array = []             ## {"pos","size","color"} 草丛
+var _rocks: Array = []             ## {"pos","size"} 石堆
 
 const MissileScript := preload("res://scripts/projectiles/missile.gd")
 const GrenadeScript := preload("res://scripts/projectiles/grenade.gd")
@@ -43,10 +48,15 @@ func _ready() -> void:
 	_generate_buildings()
 	_register_occluders()
 	_generate_props()
+	_build_prop_nodes()
 	_build_obstacles()
 	_build_nav_grid()
-	print("[Jinqiu] 建筑 %d / 地物 %d / 遮挡体 %d / 导航格 %d x %d / 可通行 %d"
-		% [buildings.size(), props.size(), rig.occluders.get_child_count(),
+	# 地景装饰要等建筑与碰撞都建好之后再撒，否则会撒进墙里
+	_generate_ground_patches()
+	_generate_cartoon_decor()
+	print("[Jinqiu] 建筑 %d / 地物 %d(节点 %d) / 遮挡体 %d / 导航格 %d x %d / 可通行 %d"
+		% [buildings.size(), props.size(), props_root.get_child_count(),
+			rig.occluders.get_child_count(),
 			nav_grid.region.size.x, nav_grid.region.size.y, _open_cell_count()])
 	queue_redraw()
 	# 离线烘焙专用：-- --dump-map 时把地图数据导出后交给 Python 处理
@@ -158,7 +168,7 @@ func _create_layers() -> void:
 	units_root = Node2D.new()
 	units_root.name = "Units"
 	units_root.y_sort_enabled = true
-	units_root.z_index = 1
+	units_root.z_index = 2
 	add_child(units_root)
 
 	projectiles_root = Node2D.new()
@@ -182,10 +192,12 @@ func _create_layers() -> void:
 ## 绘制入口：道路与地物贴地，建筑最后画压在最上层。
 ## 本节点 light_mask = 0（见 _create_layers），受光的地表是独立的地面 Sprite。
 func _draw() -> void:
+	_draw_ground_patches()
 	_draw_roads()
+	_draw_cartoon_decor()
 	_draw_decor()
+	_draw_prop_shadows()
 	_draw_buildings()
-	_draw_props()
 
 # ============================================================ 地面
 ## 载入离线烘焙的世界级地表贴图（Color + Normal）。
@@ -214,18 +226,38 @@ func _bake_ground() -> void:
 		var d: Texture2D = tex.diffuse_texture
 		ground.scale = Vector2(GameConfig.WORLD_SIZE.x / float(d.get_width()),
 			GameConfig.WORLD_SIZE.y / float(d.get_height()))
+		# 地表走"真烘焙 + 上层手绘色块"，而不是给地面挂自定义着色器：
+		# 实测给地面挂 canvas_item 着色器之后，这张地表的 Light2D 贡献会整个消失
+		# （把着色器参数全部置成无操作也一样），画面立刻暗一大截、太阳高光带也没了。
+		# 所以风格化改在绘制层做，法线贴图与真实光照原样保留。
 	else:
 		push_warning("[Jinqiu] 缺少烘焙地表贴图，回退为纯色沙地。请先运行 _bake_terrain.py")
 		var im := Image.create_empty(4, 4, false, Image.FORMAT_RGB8)
-		im.fill(Color("#8a7a5c"))
+		im.fill(Palette.SAND_DARK)
 		ground.texture = ImageTexture.create_from_image(im)
 		ground.scale = Vector2(GameConfig.WORLD_SIZE.x / 4.0, GameConfig.WORLD_SIZE.y / 4.0)
 	add_child(ground)
+	_build_ground_base()
+
+## 兜底底色：烘焙地表只有 2048x1400，铺不满 3800x2600 的战场，
+## 缺口位置会露出默认清屏色（近黑），四个角看起来像世界破了洞。
+## 这里在最底层垫一块整幅的平涂沙色，缺口就变成"同一片地"了。
+func _build_ground_base() -> void:
+	var im := Image.create_empty(2, 2, false, Image.FORMAT_RGBA8)
+	im.fill(Palette.SAND)
+	var base := Sprite2D.new()
+	base.name = "GroundBase"
+	base.z_index = -40
+	base.centered = false
+	base.light_mask = RenderRig.LAYER_GROUND
+	base.texture = ImageTexture.create_from_image(im)
+	base.scale = Vector2(GameConfig.WORLD_SIZE.x / 2.0, GameConfig.WORLD_SIZE.y / 2.0)
+	add_child(base)
 
 # ============================================================ 道路
 func _draw_roads() -> void:
-	var col_base := Color("#8d7f66")
-	var col_dark := Color("#665a47")
+	var col_base := Palette.ROAD
+	var col_dark := Palette.ROAD_DARK
 	# 东西主干道
 	_draw_road_band(Rect2(0, 1230, GameConfig.WORLD_SIZE.x, 150), true, false, col_base, col_dark)
 	# 三条南北街道
@@ -234,12 +266,15 @@ func _draw_roads() -> void:
 		_draw_road_band(Rect2(cx - 75, 1230, 150, 150), true, true, col_base, col_dark)
 
 func _draw_road_band(r: Rect2, horiz: bool, plain: bool, base: Color, dark: Color) -> void:
+	# 路基：整条路先用深色铺一遍当作轮廓底，再铺亮色路面。
+	# 卡通风格里"路比地高一层"靠的就是这一圈深边，而不是画阴影
+	draw_rect(r.grow(5.0), Palette.OUTLINE, true)
 	draw_rect(r, base, true)
-	# 用若干条平行色带模拟压实土路
+	# 路面纹理：几条平行的浅色压痕，把平涂的路面拉出一点土质感
 	var bands := 6
 	for i in bands:
 		var k := float(i) / float(bands - 1)
-		var a := 0.30 * sin(PI * k)
+		var a := 0.22 * sin(PI * k)
 		if horiz:
 			draw_rect(Rect2(r.position.x, r.position.y + r.size.y * k - 3, r.size.x, 6),
 				Color(dark.r, dark.g, dark.b, a), true)
@@ -248,18 +283,105 @@ func _draw_road_band(r: Rect2, horiz: bool, plain: bool, base: Color, dark: Colo
 				Color(dark.r, dark.g, dark.b, a), true)
 	# 中线
 	if not plain:
-		var dash := 34.0
+		var dash := 38.0
 		var gap := 30.0
 		var total := r.size.x if horiz else r.size.y
 		var t := 0.0
 		while t < total:
 			if horiz:
-				draw_rect(Rect2(r.position.x + t, r.position.y + r.size.y * 0.5 - 2, dash, 4),
-					Color(0.95, 0.89, 0.72, 0.20), true)
+				draw_rect(Rect2(r.position.x + t, r.position.y + r.size.y * 0.5 - 2.5, dash, 5),
+					Color(1.0, 0.96, 0.84, 0.55), true)
 			else:
-				draw_rect(Rect2(r.position.x + r.size.x * 0.5 - 2, r.position.y + t, 4, dash),
-					Color(0.95, 0.89, 0.72, 0.20), true)
+				draw_rect(Rect2(r.position.x + r.size.x * 0.5 - 2.5, r.position.y + t, 5, dash),
+					Color(1.0, 0.96, 0.84, 0.55), true)
 			t += dash + gap
+
+# ============================================================ 卡通地景
+## 地表色块：大片平涂的不规则色斑，压住烘焙贴图的"照片感"。
+##
+## 烘焙地表是按真实 PBR 材质混出来的，细节密度很高、过渡很连续，单独看很真实，
+## 但和旁边描边平涂的建筑放一起就不像一个世界的东西。这里在地表之上盖一层
+## 低透明度的不规则色块，把连续过渡打断成"几块颜色"，照片感就被压下去了。
+##
+## 透明度控制在 0.22~0.40：太透盖不住，太实会把法线贴图打出来的地面起伏也糊掉。
+func _generate_ground_patches() -> void:
+	_patches.clear()
+	var kinds := [
+		{"color": Palette.SAND, "alpha": 0.30, "r": [180.0, 420.0], "n": 34},
+		{"color": Palette.DIRT, "alpha": 0.26, "r": [150.0, 360.0], "n": 26},
+		{"color": Palette.GRASS, "alpha": 0.22, "r": [200.0, 460.0], "n": 22},
+	]
+	for k in kinds:
+		for i in int(k["n"]):
+			var c := Vector2(rng.randf_range(-100.0, GameConfig.WORLD_SIZE.x + 100.0),
+				rng.randf_range(-100.0, GameConfig.WORLD_SIZE.y + 100.0))
+			var rad: float = rng.randf_range(k["r"][0], k["r"][1])
+			var pts := PackedVector2Array()
+			var seg := 11
+			for j in seg:
+				var a := TAU * float(j) / float(seg)
+				# 半径抖动出不规则边，但抖动幅度压住，避免变成星星形状
+				var rr := rad * rng.randf_range(0.72, 1.22)
+				pts.append(c + Vector2(cos(a), sin(a) * 0.78) * rr)
+			_patches.append({"pts": pts, "color": k["color"], "alpha": k["alpha"]})
+
+func _draw_ground_patches() -> void:
+	for p in _patches:
+		var c: Color = p["color"]
+		draw_colored_polygon(p["pts"], Color(c.r, c.g, c.b, p["alpha"]))
+
+## 纯绘制的地景装饰：草丛、石堆、灌木。
+## 这些东西不参与碰撞、不进导航网格、也不阻挡视线 —— 它们唯一的职责是让大片
+## 平涂地表有细节可看。全部用固定种子的随机数生成，所以每次开局长得一样。
+func _draw_cartoon_decor() -> void:
+	for t in _tufts:
+		var p: Vector2 = t["pos"]
+		var s: float = t["size"]
+		# 草簇：三撮深浅不同的小三角，根部对齐
+		var col: Color = t["color"]
+		for i in 3:
+			var dx := (float(i) - 1.0) * s * 0.42
+			var h := s * (0.85 + 0.22 * float(i % 2))
+			var tip := p + Vector2(dx, -h)
+			draw_colored_polygon(PackedVector2Array([
+				p + Vector2(dx - s * 0.20, 0.0), p + Vector2(dx + s * 0.20, 0.0), tip]),
+				col)
+	for r in _rocks:
+		var p2: Vector2 = r["pos"]
+		var s2: float = r["size"]
+		# 石堆：一个带深色描边的六边形，顶面亮、右下暗
+		var pts := PackedVector2Array()
+		for i in 6:
+			var a := TAU * float(i) / 6.0 + 0.35
+			pts.append(p2 + Vector2(cos(a), sin(a) * 0.78) * s2)
+		draw_colored_polygon(pts, Palette.OUTLINE)
+		var inner := PackedVector2Array()
+		for k in pts.size():
+			inner.append(p2 + (pts[k] - p2) * 0.86)
+		draw_colored_polygon(inner, Palette.ROCK)
+		var hi := PackedVector2Array()
+		for k in 3:
+			hi.append(p2 + (inner[k] - p2) * 0.55 + Vector2(0, -s2 * 0.12))
+		draw_colored_polygon(hi, Palette.ROCK.lightened(0.18))
+
+## 生成草簇与石堆。避开建筑、道路与据点圈
+func _generate_cartoon_decor() -> void:
+	_tufts.clear()
+	_rocks.clear()
+	for i in 260:
+		var p := Vector2(rng.randf_range(60.0, GameConfig.WORLD_SIZE.x - 60.0),
+			rng.randf_range(60.0, GameConfig.WORLD_SIZE.y - 60.0))
+		if _on_road(p.x, p.y) or _solid_at(p, 14.0):
+			continue
+		var dark := rng.randf() < 0.45
+		_tufts.append({"pos": p, "size": rng.randf_range(11.0, 20.0),
+			"color": Palette.GRASS_DARK if dark else Palette.GRASS_LIGHT})
+	for i in 70:
+		var p2 := Vector2(rng.randf_range(60.0, GameConfig.WORLD_SIZE.x - 60.0),
+			rng.randf_range(60.0, GameConfig.WORLD_SIZE.y - 60.0))
+		if _on_road(p2.x, p2.y) or _solid_at(p2, 18.0):
+			continue
+		_rocks.append({"pos": p2, "size": rng.randf_range(10.0, 19.0)})
 
 # ============================================================ 地面装饰
 func _generate_props() -> void:
@@ -315,53 +437,72 @@ func _draw_decor() -> void:
 		if tex == null:
 			continue
 		var sz: float = s["size"]
-		draw_set_transform(s["pos"], s["rot"], Vector2(sz / float(tex.get_width()), sz / float(tex.get_height())))
-		draw_texture(tex, -Vector2(tex.get_width(), tex.get_height()) * 0.5,
-			Color(1, 1, 1, 0.5 if s["kind"] == "oil" else 0.42))
+		# 焦痕与油污去色：全屏提饱和之后，原本偏褐的焦痕会变成一滩暗红，
+		# 看着像血。乘一层偏冷的灰把它拉回"烧过的地面"
+		var tint := Color(0.80, 0.79, 0.76, 0.34 if s["kind"] == "oil" else 0.22)
+		draw_set_transform(s["pos"], s["rot"], Vector2(sz / AssetDB.logical_width(tex), sz / AssetDB.logical_height(tex)))
+		draw_texture(tex, -tex.get_size() * 0.5, tint)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-func _draw_props() -> void:
+## 地物改用真实节点而不是 draw_texture。
+## 原因只有一个：描边是 CanvasItem 级别的材质，draw_texture 这种"在别人的 _draw 里
+## 画一张贴图"的形式挂不上材质，树和油桶就只能是没有轮廓的贴片。
+func _build_prop_nodes() -> void:
+	props_root = Node2D.new()
+	props_root.name = "Props"
+	props_root.y_sort_enabled = true
+	props_root.z_index = 1
+	add_child(props_root)
+	for p in props:
+		var kind: String = p["kind"]
+		var pos: Vector2 = p["pos"]
+		var size: float = p["size"]
+		var tex: Texture2D = null
+		var rot: float = p["rot"]
+		match kind:
+			"tree":
+				tex = AssetDB.tile("tree_dry")
+			"barrel":
+				tex = AssetDB.tile("barrel_rust")
+				rot = 0.0
+			"wire":
+				tex = AssetDB.tile("wire")
+			_:
+				continue
+		if tex == null:
+			continue
+		var sp := Sprite2D.new()
+		sp.texture = tex
+		sp.position = pos
+		sp.rotation = rot
+		var k: float = size / AssetDB.logical_width(tex) if kind != "wire" else 1.0
+		sp.scale = Vector2(k, k)
+		if kind == "tree":
+			# 素材只有枯树。乘一层绿把枯黄压成叶色 —— 成本为零，
+			# 但沙色地面上终于能一眼看出"这里是树"
+			sp.modulate = Color(0.58, 0.98, 0.52)
+		AssetDB.apply_outline(sp)
+		props_root.add_child(sp)
+
+## 地物投影仍画在地表图层：投影必须在所有地物之下，否则后画的树会把
+## 前一棵树的影子盖掉
+func _draw_prop_shadows() -> void:
 	for p in props:
 		var kind: String = p["kind"]
 		var pos: Vector2 = p["pos"]
 		var size: float = p["size"]
 		match kind:
 			"tree":
-				var tex := AssetDB.tile("tree_dry")
-				if tex == null:
-					continue
-				_ellipse_shadow(pos + Vector2(6, 8), size * 0.42, size * 0.30)
-				var k := size / float(tex.get_width())
-				draw_set_transform(pos, p["rot"], Vector2(k, k))
-				draw_texture(tex, -Vector2(tex.get_width(), tex.get_height()) * 0.5)
+				_ellipse_shadow(pos + Vector2(8, 11), size * 0.40, size * 0.26)
 			"barrel":
-				var tex2 := AssetDB.tile("barrel_rust") if rng.randf() < 0.6 else AssetDB.tile("barrel_green")
-				if tex2 == null:
-					continue
-				_ellipse_shadow(pos + Vector2(4, 5), size * 0.5, size * 0.36)
-				var k2 := size / float(tex2.get_width())
-				draw_set_transform(pos, 0.0, Vector2(k2, k2))
-				draw_texture(tex2, -Vector2(tex2.get_width(), tex2.get_height()) * 0.5)
-			"wire":
-				var tex3 := AssetDB.tile("wire")
-				if tex3 == null:
-					continue
-				var seg := rng.randi_range(2, 4)
-				var ang := rng.randf_range(0.0, TAU)
-				var w := tex3.get_width()
-				var h := tex3.get_height()
-				for i in seg:
-					var q := pos + Vector2(cos(ang), sin(ang)) * (i * h * 0.9)
-					draw_set_transform(q, ang + PI * 0.5, Vector2.ONE)
-					draw_texture(tex3, -Vector2(w, h) * 0.5, Color(1, 1, 1, 0.42))
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+				_ellipse_shadow(pos + Vector2(5, 7), size * 0.48, size * 0.32)
 
 func _ellipse_shadow(center: Vector2, rx: float, ry: float) -> void:
 	var pts := PackedVector2Array()
 	for i in 14:
 		var a := TAU * float(i) / 14.0
 		pts.append(center + Vector2(cos(a) * rx, sin(a) * ry))
-	draw_colored_polygon(pts, Color(0, 0, 0, 0.28))
+	draw_colored_polygon(pts, Color(0.16, 0.12, 0.09, 0.32))
 
 # ============================================================ 建筑
 func _generate_buildings() -> void:
@@ -488,71 +629,108 @@ func _draw_buildings() -> void:
 	for b in buildings:
 		_draw_one_building(b)
 
-const BCOL := {
-	"house": {"top": Color("#b9a684"), "s": Color("#94805f"), "e": Color("#7f6d50"), "edge": Color(0.20, 0.16, 0.10, 0.60)},
-	"block": {"top": Color("#9c958a"), "s": Color("#7d766d"), "e": Color("#6b655d"), "edge": Color(0.16, 0.15, 0.13, 0.60)},
-	"tower": {"top": Color("#868f98"), "s": Color("#69727b"), "e": Color("#586069"), "edge": Color(0.13, 0.14, 0.16, 0.65)},
-	"warehouse": {"top": Color("#8d9399"), "s": Color("#71767c"), "e": Color("#5f646a"), "edge": Color(0.14, 0.16, 0.17, 0.60)},
-	"wall": {"top": Color("#a89b80"), "s": Color("#887c64"), "e": Color("#766b56"), "edge": Color(0.20, 0.16, 0.10, 0.55)},
-	"fence": {"top": Color("#a2957b"), "s": Color("#82765f"), "e": Color("#706551"), "edge": Color(0.20, 0.16, 0.10, 0.55)},
-	"bunker": {"top": Color("#968f74"), "s": Color("#7a745d"), "e": Color("#68634f"), "edge": Color(0.18, 0.16, 0.11, 0.60)},
-}
+## 建筑配色已统一收到 Palette.BUILD —— 改风格只需要改调色板一份
 
 func _draw_one_building(b: Dictionary) -> void:
 	var r: Rect2 = b["rect"]
 	var height: float = b["height"]
 	var type: String = b["type"]
-	var c: Dictionary = BCOL.get(type, BCOL["house"])
+	var c: Dictionary = Palette.BUILD.get(type, Palette.BUILD["house"])
 	var off := clampf(height * 23.0, 8.0, 120.0)
 	var sx := -off * 0.44
 	var sy := -off * 0.58
 	var p := r.position
 	var sz := r.size
-	# 投影
-	draw_rect(Rect2(p + Vector2(off * 0.52, off * 0.66), sz), Color(0, 0, 0, 0.30), true)
-	# 南立面
+	var w := sz.x
+	var hh := sz.y
+	# 硬投影：卡通风格里投影是"另一块更暗的色块"，不是柔和接触阴影，
+	# 所以偏移加大、不透明度统一，不做出渐隐
+	draw_rect(Rect2(p + Vector2(off * 0.58, off * 0.72), sz), Color(0.16, 0.12, 0.09, 0.34), true)
+
+	# ---- 三个面：南立面（受光最亮）/ 东立面（背光最暗）/ 顶面 ----
 	draw_colored_polygon(PackedVector2Array([
-		p + Vector2(0, sz.y), p + Vector2(sz.x, sz.y),
-		p + Vector2(sz.x + sx, sz.y + sy), p + Vector2(sx, sz.y + sy)]), c["s"])
-	# 东立面
+		p + Vector2(0, hh), p + Vector2(w, hh),
+		p + Vector2(w + sx, hh + sy), p + Vector2(sx, hh + sy)]), c["s"])
 	draw_colored_polygon(PackedVector2Array([
-		p + Vector2(sz.x, 0), p + Vector2(sz.x, sz.y),
-		p + Vector2(sz.x + sx, sz.y + sy), p + Vector2(sz.x + sx, sy)]), c["e"])
-	# 顶面
+		p + Vector2(w, 0), p + Vector2(w, hh),
+		p + Vector2(w + sx, hh + sy), p + Vector2(w + sx, sy)]), c["e"])
 	var top := Rect2(p + Vector2(sx, sy), sz)
 	draw_rect(top, c["top"], true)
-	# 顶面细节
+
+	# ---- 顶面细节 ----
 	match type:
 		"warehouse":
-			var x := 12.0
-			while x < sz.x:
-				draw_rect(Rect2(top.position.x + x, top.position.y, 2, sz.y), Color(0, 0, 0, 0.16), true)
-				x += 13.0
-		"tower", "block":
-			var gx := 26.0
-			while gx < sz.x:
-				draw_rect(Rect2(top.position.x + gx, top.position.y, 2, sz.y), Color(0, 0, 0, 0.18), true)
-				gx += 46.0
-			var gy := 26.0
-			while gy < sz.y:
-				draw_rect(Rect2(top.position.x, top.position.y + gy, sz.x, 2), Color(0, 0, 0, 0.18), true)
-				gy += 46.0
+			var x := 14.0
+			while x < w:
+				draw_rect(Rect2(top.position.x + x, top.position.y, 4, hh),
+					Color(0, 0, 0, 0.13), true)
+				draw_rect(Rect2(top.position.x + x + 4, top.position.y, 4, hh),
+					Color(1, 1, 1, 0.10), true)
+				x += 20.0
+		"tower":
+			# 地标高塔：顶面画一圈女儿墙 + 一个直升机坪十字
+			draw_rect(Rect2(top.position + Vector2(10, 10), sz - Vector2(20, 20)),
+				Palette.ROOF_TRIM.lerp(c["top"], 0.35), false, 3.0)
+			var cc := top.position + sz * 0.5
+			draw_line(cc + Vector2(-26, 0), cc + Vector2(26, 0), Palette.ROOF_TRIM, 4.0)
+			draw_line(cc + Vector2(0, -26), cc + Vector2(0, 26), Palette.ROOF_TRIM, 4.0)
+		"block":
+			var gx := 30.0
+			while gx < w - 20.0:
+				draw_rect(Rect2(top.position.x + gx, top.position.y + 14, 16, hh - 28),
+					Color(0, 0, 0, 0.14), true)
+				gx += 52.0
 		"wall", "fence":
 			var wx := 0.0
-			while wx < sz.x:
-				draw_rect(Rect2(top.position.x + wx, top.position.y, 3, sz.y), Color(0, 0, 0, 0.10), true)
-				wx += 16.0
+			while wx < w:
+				draw_rect(Rect2(top.position.x + wx, top.position.y, 3, hh),
+					Color(0, 0, 0, 0.12), true)
+				wx += 18.0
+		"bunker":
+			var bcc := top.position + sz * 0.5
+			draw_circle(bcc, minf(w, hh) * 0.26, Palette.ROOF_TRIM)
+			draw_circle(bcc, minf(w, hh) * 0.18, c["top"].darkened(0.15))
 		_:
-			draw_rect(Rect2(top.position + Vector2(4, 4), sz - Vector2(8, 8)), Color(0, 0, 0, 0.0), false)
-			draw_rect(Rect2(top.position + Vector2(4, 4), sz - Vector2(8, 8)), Color(0, 0, 0, 0.22), false)
-			draw_rect(Rect2(top.position, Vector2(sz.x, 2)), Color(1, 1, 1, 0.10), true)
-	# 轮廓
-	draw_rect(top, c["edge"], false)
-	draw_line(p + Vector2(0, sz.y), p + Vector2(sz.x, sz.y), c["edge"])
-	draw_line(p + Vector2(sz.x, sz.y), p + Vector2(sz.x, 0), c["edge"])
-	draw_line(p + Vector2(0, sz.y), p + Vector2(sx, sz.y + sy), c["edge"])
-	draw_line(p + Vector2(sz.x, sz.y), p + Vector2(sz.x + sx, sz.y + sy), c["edge"])
-	draw_line(p + Vector2(sz.x, 0), p + Vector2(sz.x + sx, sy), c["edge"])
+			# 民居屋顶：一条屋脊 + 一个烟囱
+			draw_rect(Rect2(top.position + Vector2(6, 6), sz - Vector2(12, 12)),
+				Palette.ROOF_TRIM, false, 2.0)
+			var chim := Vector2(top.position.x + w * 0.72, top.position.y + hh * 0.24)
+			draw_rect(Rect2(chim, Vector2(13, 13)), Palette.OUTLINE, true)
+			draw_rect(Rect2(chim + Vector2(2, 2), Vector2(9, 9)), Palette.ROOF_TRIM, true)
+
+	# ---- 南立面细节：门与窗 ----
+	if type != "fence" and type != "wall" and hh >= 90.0:
+		var door_w := minf(26.0, w * 0.18)
+		var door := Rect2(p + Vector2(w * 0.5 - door_w * 0.5, hh - 30.0), Vector2(door_w, 30.0))
+		draw_rect(door, Palette.OUTLINE, true)
+		draw_rect(door.grow(-2.0), Color("#6b4326"), true)
+		var win_w := 18.0
+		var gx2 := 18.0
+		while gx2 < w - win_w - 12.0:
+			var win := Rect2(p + Vector2(gx2, hh - 40.0), Vector2(win_w, 16.0))
+			draw_rect(win.grow(1.6), Palette.OUTLINE, true)
+			draw_rect(win, Palette.WINDOW, true)
+			gx2 += 40.0
+
+	# ---- 描边：沿整个剪影走一圈闭合折线 ----
+	# 早先只在几条边上描线，转角处会断开；闭合成一个多边形之后轮廓是连续的，
+	# 这才有"贴纸边"的感觉
+	var sil := PackedVector2Array([
+		p + Vector2(0, hh),
+		p + Vector2(w, hh),
+		p + Vector2(w + sx, hh + sy),
+		p + Vector2(w + sx, sy),
+		p + Vector2(sx, sy),
+		p + Vector2(sx, hh + sy),
+		p + Vector2(0, hh)])
+	var closed := sil.duplicate()
+	closed.append(sil[0])
+	draw_polyline(closed, Palette.OUTLINE, 3.0, true)
+	# 面与面之间的内结构线用细一档的软描边
+	draw_line(p + Vector2(sx, sy), p + Vector2(w + sx, sy), Palette.OUTLINE_SOFT, 1.6)
+	draw_line(p + Vector2(sx, sy), p + Vector2(0, hh), Palette.OUTLINE_SOFT, 1.6)
+	draw_line(p + Vector2(w + sx, sy), p + Vector2(w, hh), Palette.OUTLINE_SOFT, 1.6)
+	draw_line(p + Vector2(sx, hh + sy), p + Vector2(0, hh), Palette.OUTLINE_SOFT, 1.6)
 
 # ============================================================ 碰撞
 func _build_obstacles() -> void:

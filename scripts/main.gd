@@ -18,6 +18,7 @@ var ui_layer: CanvasLayer = null
 
 var picked_class: int = GameConfig.OpClass.ASSAULT
 var picked_spawn: int = 1
+var _demo_zoom: float = 0.0
 
 func _ready() -> void:
 	_enforce_window_size()
@@ -40,6 +41,8 @@ func _ready() -> void:
 	add_child(ui_layer)
 	ui_root = Control.new()
 	ui_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# 一份主题下发到整棵面板树：所有 Label / Button 自动拿到木牌金边与中文系统字体
+	ui_root.theme = UiTheme.build()
 	ui_layer.add_child(ui_root)
 	EventBus.match_ended.connect(_on_match_ended)
 	_parse_shots()
@@ -54,6 +57,10 @@ func _ready() -> void:
 	# 命令行 `-- --scoreboard`：强制展开计分板（截图用）
 	if args.has("--scoreboard"):
 		hud.force_scoreboard = true
+	# 命令行 `-- --zoom=3`：把相机推近，用于逐像素检查单位与建筑的描边（美术走查用）
+	for a in args:
+		if a.begins_with("--zoom="):
+			_demo_zoom = float(a.substr(7))
 	# 命令行 `-- --demo`：定型演示场景（直接进战斗 + 上车 + 预置连杀），截图用
 	if args.has("--demo"):
 		_demo_setup()
@@ -305,6 +312,8 @@ func _start_match() -> void:
 		pos = Vector2(GameConfig.SEGMENTS[seg]["x"] - 330.0, GameConfig.BASE_POS[GameConfig.Team.GTI].y)
 	var p: Soldier = battle.spawn_player(picked_class, pos)
 	player_ctrl.attach(p, world.camera)
+	# 美术走查用的镜头推近，对所有启动模式都生效（--auto 也能放大看单位）
+	player_ctrl.zoom_override = _demo_zoom
 	world.camera.limit_left = 0
 	world.camera.limit_top = 0
 	world.camera.limit_right = int(GameConfig.WORLD_SIZE.x)
@@ -405,12 +414,12 @@ func _add_section(panel: Control, text: String, x: float, y: float) -> void:
 	l.text = text
 	l.position = Vector2(x, y)
 	l.add_theme_font_size_override("font_size", 16)
-	l.add_theme_color_override("font_color", Color(0.62, 0.78, 0.9))
+	l.add_theme_color_override("font_color", Palette.UI_GOLD_LIGHT)
 	panel.add_child(l)
 	var line := ColorRect.new()
-	line.color = Color(0.47, 0.71, 0.86, 0.25)
+	line.color = Color(Palette.UI_GOLD.r, Palette.UI_GOLD.g, Palette.UI_GOLD.b, 0.45)
 	line.position = Vector2(x, y + 24)
-	line.size = Vector2(420, 1)
+	line.size = Vector2(420, 2)
 	panel.add_child(line)
 
 func _add_row(panel: Control, x: float, y: float, label: String, value: String, col: Color) -> void:
@@ -418,7 +427,7 @@ func _add_row(panel: Control, x: float, y: float, label: String, value: String, 
 	l.text = label
 	l.position = Vector2(x, y)
 	l.add_theme_font_size_override("font_size", 15)
-	l.add_theme_color_override("font_color", Color(0.5, 0.59, 0.66))
+	l.add_theme_color_override("font_color", Palette.UI_TEXT_DIM)
 	panel.add_child(l)
 	var v := Label.new()
 	v.text = value
@@ -444,24 +453,19 @@ func _make_panel(title: String, subtitle: String, w: float, h: float) -> Panel:
 	panel.position = (vp - Vector2(w, h)) * 0.5
 	panel.size = Vector2(w, h)
 	panel.custom_minimum_size = Vector2(w, h)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.04, 0.06, 0.08, 0.94)
-	sb.border_color = Color(0.47, 0.71, 0.86, 0.45)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(6)
-	sb.set_content_margin_all(16)
+	var sb := Palette.panel_style(0.96, 3.0)
 	panel.add_theme_stylebox_override("panel", sb)
 	ui_root.add_child(panel)
 	var t := Label.new()
 	t.text = title
 	t.position = Vector2(30, 30)
 	t.add_theme_font_size_override("font_size", 30)
-	t.add_theme_color_override("font_color", Color(0.94, 0.96, 0.98))
+	t.add_theme_color_override("font_color", Palette.UI_TEXT)
 	panel.add_child(t)
 	var s := Label.new()
 	s.text = subtitle
 	s.position = Vector2(32, 68)
 	s.add_theme_font_size_override("font_size", 14)
-	s.add_theme_color_override("font_color", Color(0.5, 0.59, 0.66))
+	s.add_theme_color_override("font_color", Palette.UI_TEXT_DIM)
 	panel.add_child(s)
 	return panel

@@ -115,14 +115,30 @@ func _apply_operator() -> void:
 		var tex := AssetDB.operator_texture_for(op_class)
 		if tex != null:
 			body.texture = tex
-			var k := AssetDB.OPERATOR_DRAW_WIDTH / float(tex.get_width())
+			# 用补边前的逻辑宽度算缩放：AssetDB 给贴图补过描边留白，
+			# 直接用 get_width 会把整个人算小一圈
+			var k := AssetDB.OPERATOR_DRAW_WIDTH / AssetDB.logical_width(tex)
 			body.scale = Vector2(k, k)
 		body.modulate = _tint_for_team()
+		AssetDB.apply_outline(body)
+
+## 阵营靠脚下的圆盘区分，不靠给整张立绘染色。
+## 染色会把描边和素材本身的颜色一起洗掉，卡通风格最怕这个；
+## 而俯视角下"脚下有个颜色圈"本来就是最有效率的敌我识别方式。
+func _draw() -> void:
+	if not alive:
+		return
+	var col := GameConfig.team_color(team)
+	var r := 15.0
+	draw_circle(Vector2(0, 4), r + 2.4, Palette.OUTLINE)
+	draw_circle(Vector2(0, 4), r, Color(col.r, col.g, col.b, 0.92))
+	draw_circle(Vector2(0, 4), r * 0.62, Color(col.r * 0.72, col.g * 0.72, col.b * 0.72, 0.95))
 
 func _tint_for_team() -> Color:
+	# 只留一点点阵营倾向；主要识别交给脚下的圆盘
 	if team == GameConfig.Team.GTI:
-		return Color(0.78, 0.88, 1.0)
-	return Color(1.0, 0.78, 0.72)
+		return Color(0.94, 0.98, 1.0)
+	return Color(1.0, 0.96, 0.94)
 
 # ---------------------------------------------------------------- 主循环
 func _physics_process(delta: float) -> void:
@@ -159,6 +175,7 @@ func _physics_process(delta: float) -> void:
 	if aim_dir.length_squared() > 0.001:
 		rotation = aim_dir.angle()
 	info.queue_redraw()
+	queue_redraw()
 
 func _tick_reload(delta: float) -> void:
 	if not is_reloading:

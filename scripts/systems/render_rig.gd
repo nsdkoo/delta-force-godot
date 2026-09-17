@@ -25,13 +25,14 @@ const LAYER_GROUND := 0b0001
 const LAYER_UNIT := 0b0010
 const LIGHT_ALL := LAYER_GROUND | LAYER_UNIT
 
-## 太阳：干燥正午偏西的暖白，压低角度换取长投影
-const SUN_COLOR := Color(1.0, 0.952, 0.865)
-const SUN_ENERGY := 1.42
+## 太阳：明亮正午的暖白。卡通风格要的是"大晴天"，压低角度换取长投影
+const SUN_COLOR := Color(1.0, 0.972, 0.905)
+const SUN_ENERGY := 1.28
 const SUN_ANGLE_DEG := -37.0
-## 天光：环境漫射。乘性压暗，留出给太阳光做高光的余量
-const AMBIENT := Color(0.755, 0.722, 0.672)
-const AMBIENT_NIGHT := Color(0.44, 0.46, 0.55)
+## 天光：环境漫射。卡通风格的天光要给足，暗部不能脏，
+## 否则高饱和的色块会被压成一片黑褐色，整个画面就"糊"了
+const AMBIENT := Color(0.945, 0.928, 0.882)
+const AMBIENT_NIGHT := Color(0.60, 0.63, 0.72)
 
 var world_env: WorldEnvironment
 var ambient: CanvasModulate
@@ -56,7 +57,7 @@ func _build_environment() -> void:
 	# 2D 场景必须用 Canvas 背景模式，否则发光不会作用在画布上
 	_env.background_mode = Environment.BG_CANVAS
 	_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	_env.ambient_light_color = Color(0.62, 0.60, 0.58)
+	_env.ambient_light_color = Color(0.80, 0.79, 0.76)
 	_env.ambient_light_energy = 1.0
 	# 辉光：阈值压到 0.82，让超过 1.0 的 HDR 像素（枪焰、爆炸、曳光）真正烧起来
 	_env.glow_enabled = true
@@ -79,11 +80,12 @@ func _build_environment() -> void:
 	_env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	_env.tonemap_exposure = 1.0
 	_env.tonemap_white = 4.0
-	# 分级：抬对比、略降饱和，去掉塑料感
+	# 分级：抬对比、提饱和。卡通风格靠高饱和的平涂色块撑画面，
+	# 之前 0.96 的降饱和会把新调色板拉回写实灰
 	_env.adjustment_enabled = true
-	_env.adjustment_brightness = 1.0
-	_env.adjustment_contrast = 1.075
-	_env.adjustment_saturation = 0.96
+	_env.adjustment_brightness = 1.02
+	_env.adjustment_contrast = 1.06
+	_env.adjustment_saturation = 1.24
 	# 辉光只作用到世界层，HUD 所在 CanvasLayer（layer >= 1）不受影响
 	_env.background_canvas_max_layer = 0
 
@@ -110,9 +112,11 @@ func _build_sun() -> void:
 	sun.height = 0.72
 	sun.rotation = deg_to_rad(SUN_ANGLE_DEG)
 	sun.shadow_enabled = true
-	sun.shadow_color = Color(0.10, 0.11, 0.16, 0.62)
+	# 影子：比原来浅、边缘更硬。卡通风格的投影是"一块明确的暗色块"，
+	# 不是柔和渐隐的写实阴影
+	sun.shadow_color = Color(0.20, 0.17, 0.24, 0.44)
 	sun.shadow_filter = Light2D.SHADOW_FILTER_PCF5
-	sun.shadow_filter_smooth = 1.6
+	sun.shadow_filter_smooth = 0.6
 	sun.shadow_item_cull_mask = LIGHT_ALL
 	# 只照地面与单位；建筑自身 light_mask = 0，不进这条链路
 	sun.range_item_cull_mask = LIGHT_ALL

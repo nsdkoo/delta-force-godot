@@ -19,6 +19,9 @@ var camera: Camera2D = null
 var vehicle: CombatVehicle = null
 var ads: float = 0.0
 var last_damage_flash := 0.0
+## 调试用：大于 0 时压过步行/驾驶的常规缩放。
+## 美术走查需要把镜头推到很近看单个单位的描边，正常玩法不需要这个。
+var zoom_override: float = 0.0
 
 func attach(p_soldier: Soldier, p_camera: Camera2D) -> void:
 	soldier = p_soldier
@@ -93,8 +96,8 @@ func _move_on_foot(delta: float) -> void:
 	if camera != null:
 		var target := soldier.global_position + soldier.aim_dir * 90.0
 		camera.global_position = camera.global_position.lerp(target, clampf(delta * 7.0, 0.0, 1.0))
-		camera.zoom = camera.zoom.lerp(Vector2.ONE * (1.24 if soldier.aiming_down_sight else 1.06),
-			clampf(delta * 8.0, 0.0, 1.0))
+		var z := zoom_override if zoom_override > 0.0 else (1.24 if soldier.aiming_down_sight else 1.06)
+		camera.zoom = camera.zoom.lerp(Vector2.ONE * z, clampf(delta * 8.0, 0.0, 1.0))
 
 # ============================================================ 驾驶
 func _try_board() -> void:
@@ -158,7 +161,8 @@ func _drive_vehicle(delta: float) -> void:
 	if camera != null:
 		camera.global_position = camera.global_position.lerp(vehicle.global_position,
 			clampf(delta * 5.0, 0.0, 1.0))
-		camera.zoom = camera.zoom.lerp(Vector2.ONE * 0.86, clampf(delta * 4.0, 0.0, 1.0))
+		var zv := zoom_override if zoom_override > 0.0 else 0.86
+		camera.zoom = camera.zoom.lerp(Vector2.ONE * zv, clampf(delta * 4.0, 0.0, 1.0))
 
 # ============================================================ 技能
 func _use_skill() -> void:

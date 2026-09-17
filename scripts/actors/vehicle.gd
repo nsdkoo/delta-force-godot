@@ -65,16 +65,18 @@ func _ready() -> void:
 	EventBus.feed.emit("%s 载具已就位" % GameConfig.TEAM_NAME[team], GameConfig.team_color(team))
 
 func _build_visual() -> void:
-	var kind_key := "tank" if kind == Kind.TANK else "apc"
+	var kind_key := kind_key()
 	_body = Sprite2D.new()
 	_body.texture = AssetDB.vehicle_body(kind_key, team)
 	_body.rotation = PI * 0.5            ## 素材车头朝上，转 90° 对齐 ang=0 朝右
 	_apply_scale(_body, radius * 2.05)
+	AssetDB.apply_outline(_body)
 	add_child(_body)
 	_turret = Sprite2D.new()
 	_turret.texture = AssetDB.vehicle_turret(kind_key, team)
 	_turret.rotation = PI * 0.5
 	_apply_scale(_turret, radius * 0.74)
+	AssetDB.apply_outline(_turret)
 	add_child(_turret)
 	var shape := CircleShape2D.new()
 	shape.radius = radius * 0.86
@@ -82,10 +84,23 @@ func _build_visual() -> void:
 	cs.shape = shape
 	add_child(cs)
 
+## 车体底下的阵营色底座。整节点随车体旋转，所以矩形底座会自动对齐车身
+func _draw() -> void:
+	if not alive:
+		return
+	var col := GameConfig.team_color(team)
+	var r := radius * 1.08
+	var box := Rect2(-r, -r * 0.80, r * 2.0, r * 1.60)
+	draw_rect(box.grow(2.6), Palette.OUTLINE, true)
+	draw_rect(box, Color(col.r, col.g, col.b, 0.92), true)
+	var inner := box.grow(-3.2)
+	draw_rect(inner, Color(col.r * 0.7, col.g * 0.7, col.b * 0.7, 0.9), true)
+
 func _apply_scale(sp: Sprite2D, target_w: float) -> void:
 	if sp.texture == null:
 		return
-	var k := target_w / float(sp.texture.get_width())
+	# 逻辑宽度：AssetDB 补过描边留白，按实际宽度算会把车体算小
+	var k := target_w / AssetDB.logical_width(sp.texture)
 	sp.scale = Vector2(k, k)
 
 # ---------------------------------------------------------------- 主循环
@@ -139,6 +154,8 @@ func _physics_process(delta: float) -> void:
 	if want_fire:
 		_try_main_gun()
 		_try_mg()
+
+	queue_redraw()
 
 func _try_main_gun() -> void:
 	if fire_cd > 0.0:
