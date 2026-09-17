@@ -129,6 +129,27 @@ func nearest_enemy_vehicle(from: Vector2, team: int, max_range: float) -> Node2D
 			best = v
 	return best
 
+## 找最近的可搭乘载具（同队、存活、且没有别的驾驶员）
+func nearest_friendly_vehicle(from: Vector2, team: int, max_range: float) -> Node2D:
+	var best: Node2D = null
+	var best_d := max_range * max_range
+	for v in vehicles:
+		if not is_instance_valid(v) or not v.alive or v.team != team or v.driver != null:
+			continue
+		var d := from.distance_squared_to(v.global_position)
+		if d < best_d:
+			best_d = d
+			best = v
+	return best
+
+## 战场上双方载具总数（计分板用）
+func alive_vehicle_count(team: int) -> int:
+	var n := 0
+	for v in vehicles:
+		if is_instance_valid(v) and v.alive and (team < 0 or v.team == team):
+			n += 1
+	return n
+
 func units_in_radius(pos: Vector2, radius: float, team: int = -1) -> Array:
 	var out: Array = []
 	var r2 := radius * radius

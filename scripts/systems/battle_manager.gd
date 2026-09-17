@@ -85,8 +85,10 @@ func _spawn_vehicles() -> void:
 		for entry in [[CombatVehicle.Kind.TANK, Vector2(side * 60.0, -260.0)],
 				[CombatVehicle.Kind.APC, Vector2(side * 30.0, 260.0)]]:
 			var v := VehicleScript.new()
-			world.units_root.add_child(v)
+			# setup 必须在入树之前：_ready 会按 kind 取数值表与贴图，
+			# 反过来写的话两辆车都会拿到默认的坦克数据，APC 就不存在了
 			v.setup(team, entry[0])
+			world.units_root.add_child(v)
 			v.global_position = base + entry[1]
 			var brain := Node.new()
 			brain.set_script(VehicleBrainScript)

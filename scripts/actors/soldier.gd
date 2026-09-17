@@ -51,6 +51,8 @@ var kills: int = 0
 var deaths: int = 0
 var damage_done: float = 0.0
 var score: float = 0.0
+var streak: int = 0                ## 当前连杀（阵亡清零），连杀奖励的门槛依据
+var best_streak: int = 0           ## 本局最高连杀，结算页展示
 
 # ---------------------------------------------------------------- 视觉
 var body: Sprite2D
@@ -65,13 +67,29 @@ func _ready() -> void:
 	info = $Info
 	_apply_operator()
 	# 碰撞：与建筑和敌方单位碰撞，同队不互相推挤
-	collision_layer = GameConfig.team_layer(team)
-	collision_mask = GameConfig.Layer.WORLD
-	collision_mask |= GameConfig.Layer.TEAM_GTI if team == GameConfig.Team.HAVOC else GameConfig.Layer.TEAM_HAVOC
+	restore_physics()
 	motion_mode = CharacterBody2D.MOTION_MODE_FLOATING
 	TeamManager.register_unit(self)
 	info.draw.connect(_draw_info)
 	EventBus.unit_spawned.emit(self)
+
+## 回到物理世界：重生与"从载具下车"共用同一份碰撞配置。
+## 抽出来是因为下车时也必须恢复 —— 少了这一步，车上会留一个看不见的碰撞体，
+## 或者下车的人再也撞不到建筑。
+func restore_physics() -> void:
+	collision_layer = GameConfig.team_layer(team)
+	collision_mask = GameConfig.Layer.WORLD
+	collision_mask |= GameConfig.Layer.TEAM_GTI if team == GameConfig.Team.HAVOC else GameConfig.Layer.TEAM_HAVOC
+	velocity = Vector2.ZERO
+	move_dir = Vector2.ZERO
+
+## 退出物理世界：上车时调用。乘员不再参与碰撞与射线判定。
+func park_for_vehicle() -> void:
+	collision_layer = 0
+	collision_mask = 0
+	velocity = Vector2.ZERO
+	move_dir = Vector2.ZERO
+	sprinting = false
 
 # ---------------------------------------------------------------- 初始化
 ## 由生成器调用：配置兵种与身份
@@ -203,6 +221,9 @@ func start_reload() -> void:
 func take_damage(amount: float, attacker: Soldier, headshot: bool = false) -> void:
 	if not alive or spawn_protection > 0.0:
 		return
+	# 车内乘员只挨装甲的伤害：否则一颗落在车边的炮弹会隔着装甲打死驾驶员
+	if in_vehicle != null:
+		return
 	hp -= amount
 	_hit_flash = 1.0
 	if attacker != null and attacker.team != team:
@@ -227,12 +248,19 @@ func _die(killer: Soldier, headshot: bool) -> void:
 	visible = false
 	collision_layer = 0
 	collision_mask = 0
+	# 阵亡断连杀：这是连杀奖励体系里唯一的"清零"入口
+	if streak > 0:
+		streak = 0
+		if is_player:
+			EventBus.player_streak_changed.emit(0)
 	MatchState.spend_ticket(team)
 	if killer != null and killer.team != team:
 		killer.kills += 1
 		killer.score += 100.0
 		if killer.is_player:
 			EventBus.hitmarker.emit(headshot, true, 0.0)
+		# 连杀计数不在这里加。是不是"算一次连杀"属于奖励规则，
+		# 由 StreakManager 监听 unit_died 后判定（支援击杀不计入，见那边注释）。
 	var txt := "%s 击倒 %s%s" % [
 		"—" if killer == null else ("你" if killer.is_player else killer.unit_name),
 		"你" if is_player else unit_name,
@@ -264,8 +292,7 @@ func _do_respawn() -> void:
 	is_reloading = false
 	spawn_protection = 1.6
 	visible = true
-	collision_layer = GameConfig.team_layer(team)
-	collision_mask = GameConfig.Layer.WORLD | (GameConfig.Layer.TEAM_GTI if team == GameConfig.Team.HAVOC else GameConfig.Layer.TEAM_HAVOC)
+	restore_physics()
 	body.modulate = _tint_for_team()
 	if is_player:
 		EventBus.player_respawned.emit(self)
@@ -276,6 +303,16 @@ func can_use_skill() -> bool:
 
 func start_skill_cd() -> void:
 	skill_cd = GameConfig.OPERATORS[op_class]["skill_cd"]
+
+## 连杀 +1。这里只负责计数与上报，具体发什么奖励由 StreakManager 决定 ——
+## 单位层不应该知道"多少杀给什么"这种规则。
+func bump_streak() -> void:
+	streak += 1
+	if streak > best_streak:
+		best_streak = streak
+	if is_player:
+		EventBus.player_streak_changed.emit(streak)
+		AudioManager.play_ui("kill", -5.0)
 
 # ---------------------------------------------------------------- 信息绘制
 func _draw_info() -> void:

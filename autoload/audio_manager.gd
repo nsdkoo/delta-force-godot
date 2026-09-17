@@ -136,6 +136,16 @@ func toggle_mute() -> bool:
 	AudioServer.set_bus_mute(0, muted)
 	return muted
 
+## 停掉全部正在播放的音效。
+## 退出前不清的话，正在播放的 AudioStreamPlaybackWAV 会活到进程结束，
+## Godot 在退出时会把它们报成 ObjectDB 泄漏。
+func stop_all() -> void:
+	for p in _pool:
+		if p != null:
+			p.stop()
+	if _ui != null:
+		_ui.stop()
+
 ## 距离衰减后的音量（用于世界音效）
 func volume_for(pos: Vector2, listener: Vector2, full_range: float = 350.0, max_range: float = 2200.0) -> float:
 	var d := pos.distance_to(listener)

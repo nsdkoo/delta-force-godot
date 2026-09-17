@@ -28,11 +28,21 @@ var aps_cd: float = 0.0
 var want_fire: bool = false
 var ammo_mode: int = 0            ## 0=穿甲弹 1=高爆弹
 var driver: Soldier = null
+var manual_gun: bool = false      ## 玩家驾驶时由 PlayerController 置位：机枪改为手动瞄准
+var ammo_switch_cd: float = 0.0   ## 切弹种的装填锁，避免一键在两种弹之间来回刷
+var shots: int = 0                ## 主炮发射计数（计分板与自检用）
+var mg_shots: int = 0             ## 机枪发射计数
 var respawn_timer: float = 0.0
 var _data: Dictionary = {}
 var _body: Sprite2D
 var _turret: Sprite2D
 var _trail_t: float = 0.0
+
+## 炮塔最大转速（弧度/秒）。约 150°/s —— 正面遭遇完全够用，
+## 但被绕到侧后就追不上，这正是"侧翼包抄"能成立的原因。
+const TURRET_SLEW := 2.6
+## 切换弹种的装填锁
+const AMMO_SWITCH_TIME := 1.2
 
 const MissileScript := preload("res://scripts/projectiles/missile.gd")
 
@@ -93,6 +103,13 @@ func _physics_process(delta: float) -> void:
 		aps_timer -= delta
 	if aps_cd > 0.0:
 		aps_cd -= delta
+	if ammo_switch_cd > 0.0:
+		ammo_switch_cd -= delta
+
+	# 炮塔按限速追目标方向。注意是"追"不是"赋值"：
+	# 直接 turret_angle = turret_dir.angle() 会让炮塔瞬间对准任何方向，
+	# 侧翼包抄就失去了意义。
+	aim_turret(turret_dir, delta)
 
 	var speed: float = _data["speed"]
 	velocity = move_dir * speed
@@ -105,6 +122,12 @@ func _physics_process(delta: float) -> void:
 	_turret.rotation = turret_angle - body_angle + PI * 0.5
 	if _trail_t > 0.0:
 		_trail_t -= delta
+
+	# 乘员跟着车走。这一步不能省 —— 据点占领、索敌、AI 选目标全都按
+	# global_position 算半径。车上的人如果留在上车点，他会在原地"占点"，
+	# 而敌人会朝一个空位置开枪。
+	if driver != null and is_instance_valid(driver):
+		driver.global_position = global_position
 
 	# 碾压步兵
 	for u in TeamManager.alive_units():
@@ -120,9 +143,11 @@ func _physics_process(delta: float) -> void:
 func _try_main_gun() -> void:
 	if fire_cd > 0.0:
 		return
-	if absf(GameConfig.angle_wrap(turret_angle - (turret_dir.angle()))) > 0.12:
+	# 炮口没对上就打不出去 —— 炮塔有转速限制，所以"被绕侧"是真的打不到人
+	if not turret_ready():
 		return
 	fire_cd = _data["reload"]
+	shots += 1
 	EventBus.explosion.emit(global_position + turret_dir * (radius + 10.0), 1.2, "muzzle")
 	AudioManager.play_2d("shot_cannon", global_position,
 		AudioManager.volume_for(global_position, _listener(), 400.0, 2600.0))
@@ -163,10 +188,18 @@ func _try_mg() -> void:
 	if mg_cd > 0.0:
 		return
 	mg_cd = 0.09
-	var enemy := TeamManager.nearest_visible_enemy(global_position, team, 900.0)
-	if enemy == null:
-		return
-	var dir := (enemy.global_position - global_position).normalized()
+	var dir: Vector2
+	if manual_gun:
+		# 玩家驾驶：机枪跟随炮塔朝向手动点射，不做自动索敌
+		if not turret_ready(0.25):
+			return
+		dir = turret_dir
+	else:
+		var enemy := TeamManager.nearest_visible_enemy(global_position, team, 900.0)
+		if enemy == null:
+			return
+		dir = (enemy.global_position - global_position).normalized()
+	mg_shots += 1
 	EventBus.shot_fired.emit(self, global_position + dir * radius, dir, "mg_veh")
 	# 机枪：命中判定走一次射线
 	var space := get_world_2d().direct_space_state
@@ -186,6 +219,39 @@ func _listener() -> Vector2:
 	if TeamManager.player != null and is_instance_valid(TeamManager.player):
 		return TeamManager.player.global_position
 	return global_position
+
+# ---------------------------------------------------------------- 炮塔 / 弹种
+## 把炮塔朝 dir 转过去，单帧转角不超过 TURRET_SLEW * delta
+func aim_turret(dir: Vector2, delta: float) -> void:
+	if dir.length_squared() < 0.0001:
+		return
+	var diff := GameConfig.angle_wrap(dir.angle() - turret_angle)
+	turret_angle = wrapf(turret_angle + clampf(diff, -TURRET_SLEW * delta, TURRET_SLEW * delta), -PI, PI)
+
+## 炮口是否已经对上来袭方向（主炮开火的唯一前置条件）
+func turret_ready(tolerance: float = 0.12) -> bool:
+	return absf(GameConfig.angle_wrap(turret_angle - turret_dir.angle())) <= tolerance
+
+## 切换弹种。有装填锁，否则战斗中 1/2 连按可以绕过主炮的 6.5 秒装填
+func switch_ammo(mode: int) -> bool:
+	if not alive or ammo_switch_cd > 0.0 or mode == ammo_mode:
+		return false
+	ammo_mode = mode
+	ammo_switch_cd = AMMO_SWITCH_TIME
+	fire_cd = maxf(fire_cd, AMMO_SWITCH_TIME)
+	EventBus.feed.emit("%s 装填%s" % [display_name(), "高爆弹" if mode == 1 else "穿甲弹"],
+		Color("#ffc24a") if mode == 1 else Color("#8fc4ff"))
+	AudioManager.play_2d("reload_b", global_position, -4.0)
+	return true
+
+func ammo_label() -> String:
+	return "高爆弹" if ammo_mode == 1 else "穿甲弹"
+
+func display_name() -> String:
+	return _data.get("name", "载具")
+
+func kind_key() -> String:
+	return "tank" if kind == Kind.TANK else "apc"
 
 # ---------------------------------------------------------------- APS
 func activate_aps() -> bool:
@@ -224,9 +290,13 @@ func _destroy(attacker: Soldier) -> void:
 	visible = false
 	collision_layer = 0
 	collision_mask = 0
+	# 乘员要真正被抛出去。这里不能只把 driver 置空 ——
+	# 那样玩家会以"隐形 + 零碰撞"的状态留在原地，再也回不到战场上。
 	if driver != null:
-		driver.in_vehicle = null
-		driver = null
+		var crew: Soldier = driver
+		exit_vehicle()
+		## 载具被毁不等于乘员阵亡：重伤留一口气，而不是直接判死
+		crew.take_damage(minf(70.0, maxf(0.0, crew.hp - 1.0)), attacker)
 	EventBus.explosion.emit(global_position, 2.8, "boom")
 	EventBus.vehicle_destroyed.emit(global_position, _data["name"],
 		attacker != null and attacker.is_player)
@@ -248,15 +318,52 @@ func _do_respawn() -> void:
 	collision_layer = GameConfig.Layer.VEHICLE
 	collision_mask = GameConfig.Layer.WORLD | GameConfig.Layer.VEHICLE
 
+# ---------------------------------------------------------------- 乘员
 ## 玩家进出载具
-func enter(p: Soldier) -> void:
+func enter(p: Soldier) -> bool:
+	if not alive or driver != null or p == null or not p.alive:
+		return false
+	# 一个人只能在一辆车里：否则会出现两辆车同时记着同一个驾驶员
+	if p.in_vehicle != null:
+		return false
 	driver = p
 	p.in_vehicle = self
 	p.visible = false
+	# 乘员退出物理世界：否则车上会留下一个看不见的碰撞体，挡人挡枪挡射线
+	p.park_for_vehicle()
+	# 上车瞬间炮塔对齐车头，避免沿用上一任驾驶员的朝向
+	turret_dir = Vector2.from_angle(body_angle)
+	p.aim_dir = turret_dir
+	AudioManager.play_2d("ui_up", global_position, -2.0)
+	EventBus.feed.emit("已进入 %s" % display_name(), GameConfig.team_color(team))
+	return true
 
 func exit_vehicle() -> void:
-	if driver != null:
-		driver.global_position = global_position + Vector2(0, radius + 26.0)
-		driver.visible = true
-		driver.in_vehicle = null
-		driver = null
+	if driver == null:
+		return
+	var p: Soldier = driver
+	driver = null
+	p.in_vehicle = null
+	p.global_position = _eject_position()
+	p.visible = true
+	p.aim_dir = turret_dir
+	p.restore_physics()
+	EventBus.feed.emit("已离开 %s" % display_name(), Color("#8fc4ff"))
+
+## 下车落点：优先找四个方向里第一个可站人的位置。
+## 直接写死"车下方 26 像素"在贴墙停车时会把下车的人塞进建筑里。
+func _eject_position() -> Vector2:
+	var map := get_tree().get_first_node_in_group("world_map")
+	var d := radius + 30.0
+	var candidates := [Vector2(0, d), Vector2(0, -d), Vector2(d, 0), Vector2(-d, 0)]
+	for c in candidates:
+		var p: Vector2 = global_position + c
+		if p.x < 40.0 or p.y < 40.0 or p.x > GameConfig.WORLD_SIZE.x - 40.0 or p.y > GameConfig.WORLD_SIZE.y - 40.0:
+			continue
+		if map != null and map.has_method("is_walkable") and not map.is_walkable(p):
+			continue
+		return p
+	return global_position + Vector2(0, d)
+
+func has_player_driver() -> bool:
+	return driver != null and driver.is_player

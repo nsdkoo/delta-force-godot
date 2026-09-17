@@ -64,9 +64,8 @@ func _drive(delta: float) -> void:
 		return
 	var to_target := target_pos - veh.global_position
 	var dist := to_target.length()
-	# 炮塔始终锁敌
+	# 炮塔锁敌：只写"想要的方向"，实际转角由 CombatVehicle.aim_turret 按转速限制推进
 	veh.turret_dir = to_target / maxf(dist, 0.001)
-	veh.turret_angle = veh.turret_dir.angle()
 	# 车体推进到约 420 距离
 	if target != null:
 		veh.move_dir = to_target.normalized() if dist > 420.0 else Vector2(-to_target.y, to_target.x).normalized() * 0.4

@@ -7,17 +7,20 @@ extends Node2D
 ## ============================================================================
 
 const WorldScene := preload("res://scenes/world/Jinqiu.tscn")
+const SelftestScript := preload("res://scripts/systems/selftest.gd")
 
 var world: Node2D = null
 var battle: BattleManager = null
 var hud: HUD = null
 var player_ctrl: PlayerController = null
 var ui_root: Control = null
+var ui_layer: CanvasLayer = null
 
 var picked_class: int = GameConfig.OpClass.ASSAULT
 var picked_spawn: int = 1
 
 func _ready() -> void:
+	_enforce_window_size()
 	print("[Main] 三角洲行动 · 全面战场 · 胜者为王 · 启动")
 	_self_check()
 	world = WorldScene.instantiate()
@@ -30,17 +33,60 @@ func _ready() -> void:
 	hud.battle = battle
 	player_ctrl = PlayerController.new()
 	add_child(player_ctrl)
+	# 面板层必须压过 HUD（HUD 是 CanvasLayer 10）。
+	# 结算页 / 部署页是半透明大面板，画在 HUD 下面会被血条、雷达、击杀播报穿透。
+	ui_layer = CanvasLayer.new()
+	ui_layer.layer = 20
+	add_child(ui_layer)
 	ui_root = Control.new()
 	ui_root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(ui_root)
+	ui_layer.add_child(ui_root)
 	EventBus.match_ended.connect(_on_match_ended)
 	_parse_shots()
+	var args := OS.get_cmdline_user_args()
+	# 命令行 `-- --selftest`：无头自检，逐条断言并返回退出码
+	if args.has("--selftest"):
+		var runner := Node.new()
+		runner.set_script(SelftestScript)
+		add_child(runner)
+		runner.run(self)
+		return
+	# 命令行 `-- --scoreboard`：强制展开计分板（截图用）
+	if args.has("--scoreboard"):
+		hud.force_scoreboard = true
+	# 命令行 `-- --demo`：定型演示场景（直接进战斗 + 上车 + 预置连杀），截图用
+	if args.has("--demo"):
+		_demo_setup()
+		return
 	# 命令行 `-- --auto` 跳过交互直接开打（用于自动化验证）
-	var auto := OS.get_cmdline_user_args().has("--auto") or OS.get_cmdline_args().has("--auto")
-	if auto:
+	if args.has("--auto") or OS.get_cmdline_args().has("--auto"):
 		_auto_start()
 	else:
 		_run_elect()
+
+## 演示场景：把玩家放进载具并推到"8 连杀 · 空袭待呼叫"，
+## 这样一张截图里同时能看到载具面板、连杀条与支援提示。
+## 只用于截图与人工走查，不参与正常流程。
+func _demo_setup() -> void:
+	print("[Demo] 视口 %s · 窗口 %s" % [
+		str(get_viewport().get_visible_rect().size), str(DisplayServer.window_get_size())])
+	MatchState.player_is_commander = true
+	MatchState.set_phase(GameConfig.Phase.DEPLOY)
+	await get_tree().create_timer(0.2).timeout
+	_start_match()
+	await get_tree().create_timer(0.4).timeout
+	var p: Soldier = TeamManager.player
+	if p != null and is_instance_valid(p):
+		var v: CombatVehicle = TeamManager.nearest_friendly_vehicle(p.global_position, p.team, 4000.0)
+		if v != null:
+			p.global_position = v.global_position + Vector2(52.0, 0.0)
+			await get_tree().create_timer(0.15).timeout
+			if v.enter(p):
+				player_ctrl.vehicle = v
+				v.manual_gun = true
+		# 触发第 8 档奖励：连杀条会显示"空袭待呼叫"
+		p.streak = 8
+		EventBus.player_streak_changed.emit(8)
 
 # ---------------------------------------------------------------- 截图开关
 ## 命令行 `-- --shot=6,14,26`：在指定秒数抓取渲染结果，全部抓完自动退出。
@@ -106,8 +152,27 @@ func _total_kills() -> int:
 			n += u.kills
 	return n
 
+## project.godot 里的 display/window/size/window_width_override=700 在 Godot 4.7.2 上
+## 不生效：实测启动出来的窗口是 1600x394（宽度覆盖被忽略、只吃到了高度覆盖），
+## 逻辑视口被 aspect=expand 拉成 3654x900，画面成了 4:1 的超宽条。
+## 这里在启动时显式设一次。目标尺寸 700x394 与 1600x900 同比例，
+## 逻辑分辨率仍然是 1600x900，UI 布局与坐标计算完全不受影响。
+const BROKEN_DEFAULT_WINDOW := Vector2i(1600, 394)
+const INTENDED_WINDOW := Vector2i(700, 394)
+
+func _enforce_window_size() -> void:
+	if OS.has_feature("headless"):
+		return
+	# 只纠正这一个特征值：宽度 1600 来自 viewport_width、高度 394 来自 height_override，
+	# 正是"宽度覆盖没生效"的指纹。命令行 --resolution 给的任何其它尺寸都不会被动到，
+	# 截图与美术比对仍然可以自由指定分辨率。
+	if DisplayServer.window_get_size() != BROKEN_DEFAULT_WINDOW:
+		return
+	print("[Main] 窗口尺寸校正 %s -> %s" % [str(BROKEN_DEFAULT_WINDOW), str(INTENDED_WINDOW)])
+	DisplayServer.window_set_size(INTENDED_WINDOW)
+
 func _self_check() -> void:
-	print("  ├ 单例: EventBus/GameConfig/AssetDB/MatchState/TeamManager/AudioManager 全部就绪")
+	print("  ├ 单例: EventBus/GameConfig/AssetDB/MatchState/TeamManager/AudioManager/StreakManager 全部就绪")
 	print("  ├ 素材 %d 张 · 音效 %d 条" % [AssetDB.tex.size(), AudioManager.streams.size()])
 	print("  └ 干员 %d / 武器 %d / 载具 %d / 据点 %d"
 		% [GameConfig.OPERATORS.size(), GameConfig.WEAPONS.size(),
@@ -247,34 +312,120 @@ func _start_match() -> void:
 	world.camera.make_current()
 	EventBus.banner.emit("战斗开始 · 推进 " + GameConfig.CAPTURES[0]["name"], GameConfig.TEAM_COLOR[0], 3.6)
 	EventBus.feed.emit("战斗开始 · 20 v 20 指挥官模式 · 无 AI 机器人可刷分", Color("#ffd24a"))
-	print("[Main] 战斗开始 · 玩家兵种 %d · 出生 %s" % [picked_class, pos])
+	var vk := {}
+	for v in TeamManager.vehicles:
+		if is_instance_valid(v):
+			vk[v.display_name()] = int(vk.get(v.display_name(), 0)) + 1
+	print("[Main] 战斗开始 · 玩家兵种 %d · 出生 %s · 载具 %s" % [picked_class, pos, str(vk)])
 
 # ============================================================ 结算
+## 结算详情页：个人战绩 + 双方对比。
+## 之前这里只有五行数字，看不出"我打得怎么样" —— 尤其看不到连杀与队伍层面
+## 的差距，所以这一版把个人生涯项和两支队伍的六项指标并排摆出来。
 func _on_match_ended(win_team: int, title: String, subtitle: String) -> void:
 	print("[Main] 战局结束 → %s / %s" % [title, subtitle])
 	var p: Soldier = TeamManager.player
 	var win: bool = p != null and p.team == win_team
-	var panel := _make_panel("胜者为王" if win else "战败",
-		title + " · " + subtitle, 520.0, 420.0)
-	var stats := Label.new()
+	var panel := _make_panel("胜者为王" if win else "战败", title + " · " + subtitle, 980.0, 620.0)
+
+	# ---- 左栏：个人战绩 ----
+	_add_section(panel, "个人战绩", 40.0, 122.0)
 	var kills: int = p.kills if p != null else 0
 	var deaths: int = p.deaths if p != null else 0
 	var dmg: int = int(p.damage_done) if p != null else 0
-	var owned: int = MatchState.owned_count(GameConfig.Team.GTI)
-	stats.text = "击杀  %d        死亡  %d\n总伤害  %d\n据点控制  %d / %d\n最终票数  %d : %d" % [
-		kills, deaths, dmg, owned, GameConfig.CAPTURES.size(),
-		MatchState.tickets[0], MatchState.tickets[1]]
-	stats.position = Vector2(40, 150)
-	stats.add_theme_font_size_override("font_size", 20)
-	panel.add_child(stats)
+	var score: int = int(p.score) if p != null else 0
+	var best: int = p.best_streak if p != null else 0
+	var cls_name: String = GameConfig.CLASS_NAME_CN[p.op_class] if p != null else "—"
+	var kd: String = "—" if deaths == 0 else "%.2f" % (float(kills) / float(deaths))
+	var rows := [
+		["干员", cls_name, Color(0.84, 0.9, 0.94)],
+		["击杀", str(kills), Color("#ffd24a")],
+		["死亡", str(deaths), Color(0.72, 0.8, 0.86)],
+		["K / D", kd, Color("#8fc4ff")],
+		["总伤害", str(dmg), Color(0.72, 0.8, 0.86)],
+		["得分", str(score), Color("#57e08a")],
+		["最高连杀", "%d 连杀" % best, Color("#ff9a3a")],
+	]
+	var ry := 158.0
+	for r in rows:
+		_add_row(panel, 48.0, ry, r[0], r[1], r[2])
+		ry += 34.0
+
+	# ---- 右栏：双方对比 ----
+	_add_section(panel, "双方对比", 520.0, 122.0)
+	var gti_kills := _team_total_kills(GameConfig.Team.GTI)
+	var havoc_kills := _team_total_kills(GameConfig.Team.HAVOC)
+	var elapsed := int(GameConfig.MATCH_TIME - MatchState.time_left)
+	var compare := [
+		["票数", "%d  :  %d" % [MatchState.tickets[0], MatchState.tickets[1]], Color(0.84, 0.9, 0.94)],
+		["据点控制", "%d / %d" % [MatchState.owned_count(GameConfig.Team.GTI), GameConfig.CAPTURES.size()], Color("#8fc4ff")],
+		["区域推进", MatchState.current_segment_name(), Color("#ffd24a")],
+		["总击杀", "%d  :  %d" % [gti_kills, havoc_kills], Color(0.84, 0.9, 0.94)],
+		["存活人数", "%d  :  %d" % [TeamManager.alive_count(0), TeamManager.alive_count(1)], Color(0.72, 0.8, 0.86)],
+		["在场载具", "%d  :  %d" % [TeamManager.alive_vehicle_count(0), TeamManager.alive_vehicle_count(1)], Color(0.72, 0.8, 0.86)],
+		["战局时长", "%02d:%02d" % [elapsed / 60, elapsed % 60], Color(0.5, 0.59, 0.66)],
+	]
+	ry = 158.0
+	for r in compare:
+		_add_row(panel, 528.0, ry, r[0], r[1], r[2])
+		ry += 34.0
+
+	# ---- 结论 ----
+	var verdict := Label.new()
+	verdict.text = ("GTI 达成战役目标 · " if win_team == GameConfig.Team.GTI else "哈夫克守住烬区 · ") + title
+	verdict.position = Vector2(48, 424)
+	verdict.add_theme_font_size_override("font_size", 17)
+	verdict.add_theme_color_override("font_color",
+		GameConfig.TEAM_COLOR[win_team])
+	panel.add_child(verdict)
+	var hint := Label.new()
+	hint.text = "按 Tab 在对局中可随时查看完整计分板"
+	hint.position = Vector2(48, 452)
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color(0.5, 0.59, 0.66))
+	panel.add_child(hint)
+
 	var again := Button.new()
 	again.text = "再 战 一 局"
-	again.custom_minimum_size = Vector2(440, 54)
-	again.position = Vector2(40, 330)
+	again.custom_minimum_size = Vector2(900, 56)
+	again.position = Vector2(40, 510)
 	again.pressed.connect(func():
 		panel.queue_free()
 		_restart())
 	panel.add_child(again)
+
+func _team_total_kills(team: int) -> int:
+	var n := 0
+	for u in TeamManager.all_units(team):
+		n += u.kills
+	return n
+
+func _add_section(panel: Control, text: String, x: float, y: float) -> void:
+	var l := Label.new()
+	l.text = text
+	l.position = Vector2(x, y)
+	l.add_theme_font_size_override("font_size", 16)
+	l.add_theme_color_override("font_color", Color(0.62, 0.78, 0.9))
+	panel.add_child(l)
+	var line := ColorRect.new()
+	line.color = Color(0.47, 0.71, 0.86, 0.25)
+	line.position = Vector2(x, y + 24)
+	line.size = Vector2(420, 1)
+	panel.add_child(line)
+
+func _add_row(panel: Control, x: float, y: float, label: String, value: String, col: Color) -> void:
+	var l := Label.new()
+	l.text = label
+	l.position = Vector2(x, y)
+	l.add_theme_font_size_override("font_size", 15)
+	l.add_theme_color_override("font_color", Color(0.5, 0.59, 0.66))
+	panel.add_child(l)
+	var v := Label.new()
+	v.text = value
+	v.position = Vector2(x + 118, y)
+	v.add_theme_font_size_override("font_size", 17)
+	v.add_theme_color_override("font_color", col)
+	panel.add_child(v)
 
 func _restart() -> void:
 	get_tree().reload_current_scene()

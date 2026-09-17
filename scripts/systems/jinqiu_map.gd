@@ -33,6 +33,7 @@ var rng := RandomNumberGenerator.new()
 const MissileScript := preload("res://scripts/projectiles/missile.gd")
 const GrenadeScript := preload("res://scripts/projectiles/grenade.gd")
 const MedkitScript := preload("res://scripts/systems/medkit.gd")
+const FxLayerScript := preload("res://scripts/systems/fx_layer.gd")
 
 func _ready() -> void:
 	add_to_group("world_map")
@@ -169,6 +170,7 @@ func _create_layers() -> void:
 	fx_layer = Node2D.new()
 	fx_layer.name = "Fx"
 	fx_layer.z_index = 8
+	fx_layer.set_script(FxLayerScript)
 	add_child(fx_layer)
 
 	camera = Camera2D.new()
@@ -598,10 +600,12 @@ func world_to_cell(p: Vector2) -> Vector2i:
 
 ## 取路径（世界坐标），失败返回空数组
 func find_path(from: Vector2, to: Vector2) -> PackedVector2Array:
-	var a := world_to_cell(from)
-	var b := world_to_cell(to)
-	_clamp_cell(a)
-	_clamp_cell(b)
+	# 必须先夹取到网格范围内再查。
+	# 注意 _clamp_cell 是返回值而不是原地修改 —— Vector2i 是值类型，
+	# 写 `_clamp_cell(a)` 那种"传进去改"的形式在 GDScript 里是空操作，
+	# 越界坐标会一路带到 AStarGrid2D 里刷 out of bounds 报错。
+	var a := _clamp_cell(world_to_cell(from))
+	var b := _clamp_cell(world_to_cell(to))
 	var solid_a := nav_grid.is_point_solid(a)
 	var solid_b := nav_grid.is_point_solid(b)
 	if solid_a:
@@ -618,9 +622,10 @@ func find_path(from: Vector2, to: Vector2) -> PackedVector2Array:
 		out[out.size() - 1] = to
 	return out
 
-func _clamp_cell(c: Vector2i) -> void:
-	c.x = clampi(c.x, 0, nav_grid.region.size.x - 1)
-	c.y = clampi(c.y, 0, nav_grid.region.size.y - 1)
+func _clamp_cell(c: Vector2i) -> Vector2i:
+	return Vector2i(
+		clampi(c.x, 0, nav_grid.region.size.x - 1),
+		clampi(c.y, 0, nav_grid.region.size.y - 1))
 
 func _nearest_open(c: Vector2i) -> Vector2i:
 	if not nav_grid.is_point_solid(c):

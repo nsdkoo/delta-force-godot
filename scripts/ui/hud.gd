@@ -29,6 +29,10 @@ var streak := 0
 var uav := 0.0
 var support_kind := ""
 
+## 命令行 `-- --scoreboard` 时强制展开计分板。
+## 它是按住 Tab 才出现的临时界面，截图与美术比对没法合成按住动作，所以留这个开关。
+var force_scoreboard := false
+
 const FEED_MAX := 6
 const BANNER_DUR := 3.2
 const TOAST_DUR := 2.6
@@ -120,14 +124,27 @@ func _draw_hud() -> void:
 	_draw_feed()
 	if player != null and is_instance_valid(player):
 		_draw_squad(vp, player)
-		_draw_weapon(vp, player)
+		var veh: CombatVehicle = _player_vehicle(player)
+		if veh != null:
+			_draw_vehicle(vp, player, veh)
+		else:
+			_draw_weapon(vp, player)
 		_draw_minimap(vp, player)
 		_draw_crosshair(vp, player)
+		_draw_streak(vp)
 		if not player.alive:
 			_draw_death(vp, player)
 	_draw_banner(vp)
 	_draw_toast(vp)
 	_draw_hurt(vp)
+	# 计分板压在最上层：它是按住才会出现的临时界面
+	if force_scoreboard or Input.is_action_pressed("scoreboard"):
+		_draw_scoreboard(vp, player)
+
+func _player_vehicle(player: Soldier) -> CombatVehicle:
+	if player.in_vehicle == null or not is_instance_valid(player.in_vehicle):
+		return null
+	return player.in_vehicle as CombatVehicle
 
 func _draw_vignette(vp: Vector2) -> void:
 	# 用四条渐隐边框模拟暗角（draw_rect 不支持渐变，用多层近似）
@@ -404,3 +421,175 @@ func _draw_hurt(vp: Vector2) -> void:
 			c + dir.rotated(0.22) * 142.0,
 			c + dir.rotated(-0.22) * 142.0])
 		layer_root.draw_colored_polygon(pts, Color(1.0, 0.36, 0.29, a * 0.85))
+
+# ============================================================ 载具
+## 驾驶时右侧面板由"武器"换成"车况"。车上没有弹匣与技能，但有弹种和 APS。
+func _draw_vehicle(vp: Vector2, player: Soldier, veh: CombatVehicle) -> void:
+	var w := 262.0
+	var h := 118.0
+	var x := vp.x - w - 14.0
+	var y := vp.y - h - 14.0
+	_panel(Rect2(x, y, w, h))
+	layer_root.draw_string(font_bold, Vector2(x + 12, y + 26), veh.display_name(),
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.92, 0.95, 0.97))
+	# 车体血量
+	var k := clampf(veh.hp / maxf(veh.max_hp, 1.0), 0.0, 1.0)
+	layer_root.draw_rect(Rect2(x + 12, y + 36, 238, 9), Color(0, 0, 0, 0.5), true)
+	var hc := Color("#57e08a")
+	if k < 0.25:
+		hc = Color("#ff5b4a")
+	elif k < 0.5:
+		hc = Color("#ffd24a")
+	layer_root.draw_rect(Rect2(x + 12, y + 36, 238 * k, 9), hc, true)
+	layer_root.draw_string(font, Vector2(x + 12, y + 60), "%d / %d" % [int(veh.hp), int(veh.max_hp)],
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.62, 0.7, 0.76))
+	# 弹种
+	var ammo_col: Color = Color("#ffc24a") if veh.ammo_mode == 1 else Color("#8fc4ff")
+	var ammo_txt := "[1/2] %s" % veh.ammo_label()
+	if veh.ammo_switch_cd > 0.0:
+		ammo_txt += "  装填 %.1fs" % veh.ammo_switch_cd
+	layer_root.draw_string(font, Vector2(x + 12, y + 80), ammo_txt,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ammo_col)
+	# APS
+	var aps_txt: String
+	var aps_col: Color
+	if veh.aps_timer > 0.0:
+		aps_txt = "[3] 主动防御 生效 %.1fs" % veh.aps_timer
+		aps_col = Color("#57e08a")
+	elif veh.aps_cd > 0.0:
+		aps_txt = "[3] 主动防御 冷却 %.1fs" % veh.aps_cd
+		aps_col = Color(0.36, 0.42, 0.47)
+	else:
+		aps_txt = "[3] 主动防御 就绪"
+		aps_col = Color("#8fc4ff")
+	layer_root.draw_string(font, Vector2(x + 12, y + 100), aps_txt,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, aps_col)
+	layer_root.draw_string(font, Vector2(x + 150, y + 100), "[F] 下车",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.5, 0.59, 0.66))
+
+# ============================================================ 连杀
+## 右上角常驻：连杀数 / 到下一档的进度 / 待呼叫的支援 / UAV 剩余时间。
+## 放在右上是因为左侧归击杀播报、顶部归票数与据点、右下归武器与雷达，
+## 右上这块在整场战斗里都没有被占用。
+func _draw_streak(vp: Vector2) -> void:
+	var w := 252.0
+	var h := 64.0
+	var x := vp.x - w - 14.0
+	var y := 14.0
+	_panel(Rect2(x, y, w, h), 0.62)
+	var cur := StreakManager.streak
+	layer_root.draw_string(font_bold, Vector2(x + 12, y + 26), "连杀  %d" % cur,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 17,
+		Color("#ffd24a") if cur > 0 else Color(0.5, 0.59, 0.66))
+	var nxt := StreakManager.next_threshold()
+	if nxt > 0:
+		layer_root.draw_string(font, Vector2(x + 100, y + 25), "下一档 %d 杀" % nxt,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.5, 0.59, 0.66))
+		# 进度条：用相邻两档之间的比例，到顶后填满
+		var prev := 0
+		for t in GameConfig.STREAK_REWARDS:
+			if t < nxt:
+				prev = t
+		var k := clampf(float(cur - prev) / float(maxi(nxt - prev, 1)), 0.0, 1.0)
+		layer_root.draw_rect(Rect2(x + 12, y + 34, 228, 5), Color(1, 1, 1, 0.1), true)
+		layer_root.draw_rect(Rect2(x + 12, y + 34, 228 * k, 5), Color("#ffd24a"), true)
+	else:
+		layer_root.draw_string(font, Vector2(x + 100, y + 25), "全部解锁",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.5, 0.59, 0.66))
+	# 待呼叫支援 / UAV
+	if StreakManager.support_kind != "":
+		layer_root.draw_string(font_bold, Vector2(x + 12, y + 54),
+			"[X] %s 待呼叫" % StreakManager.support_label(),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#ff9a3a"))
+	elif uav > 0.0:
+		layer_root.draw_string(font_bold, Vector2(x + 12, y + 54),
+			"无人机侦察中  %.1fs" % uav, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#8fc4ff"))
+
+# ============================================================ 计分板
+## 按住 Tab 显示。左右两列各一支队伍，按得分排序。
+## 只读数据、不缓存 —— 计分板是低频界面，每帧重排 40 个元素的开销可以忽略，
+## 而缓存反而会在重生/换兵种时显示陈旧数据。
+func _draw_scoreboard(vp: Vector2, player: Soldier) -> void:
+	var w := 1160.0
+	var h := 600.0
+	var px := (vp.x - w) * 0.5
+	var py := (vp.y - h) * 0.5
+	layer_root.draw_rect(Rect2(0, 0, vp.x, vp.y), Color(0.02, 0.03, 0.04, 0.55), true)
+	_panel(Rect2(px, py, w, h), 0.93)
+	layer_root.draw_string(font_bold, Vector2(px + 24, py + 40), "战 绩 · 烬区",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 26, Color(0.94, 0.96, 0.98))
+	var head := "据点 %d / %d    %s" % [
+		MatchState.owned_count(GameConfig.Team.GTI), GameConfig.CAPTURES.size(),
+		MatchState.time_string()]
+	layer_root.draw_string(font, Vector2(px + w - 300, py + 38), head,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.5, 0.59, 0.66))
+	var col_w := 552.0
+	for i in 2:
+		_draw_score_column(px + 20.0 + float(i) * (col_w + 16.0), py + 62.0, col_w, i, player)
+
+func _draw_score_column(x: float, y: float, w: float, team: int, player: Soldier) -> void:
+	var col: Color = GameConfig.TEAM_COLOR[team]
+	layer_root.draw_string(font_bold, Vector2(x + 4, y + 20),
+		"%s · %s" % [GameConfig.TEAM_NAME[team], GameConfig.TEAM_ROLE[team]],
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, col)
+	layer_root.draw_string(font, Vector2(x + w - 110, y + 20), "票数  %d" % MatchState.tickets[team],
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 15, col)
+	# 表头
+	var hy := y + 34.0
+	layer_root.draw_string(font, Vector2(x + 4, hy), "干员",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.45, 0.53, 0.6))
+	for spec in [["兵种", 232.0], ["K", 300.0], ["D", 328.0], ["伤害", 360.0], ["得分", 452.0]]:
+		layer_root.draw_string(font, Vector2(x + float(spec[1]), hy), str(spec[0]),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.45, 0.53, 0.6))
+	layer_root.draw_line(Vector2(x, hy + 4.0), Vector2(x + w - 30.0, hy + 4.0),
+		Color(0.47, 0.71, 0.86, 0.2), 1.0)
+	var units: Array = TeamManager.all_units(team)
+	units.sort_custom(func(a, b): return float(a.score) > float(b.score))
+	var ry := hy + 20.0
+	for u in units:
+		var is_me: bool = player != null and is_instance_valid(player) and u == player
+		var mine: bool = player != null and is_instance_valid(player) and u.team == player.team \
+			and player.squad_id == u.squad_id
+		if is_me:
+			layer_root.draw_rect(Rect2(x - 2, ry - 11, w - 24, 19), Color(1.0, 0.82, 0.29, 0.16), true)
+		elif mine:
+			layer_root.draw_rect(Rect2(x - 2, ry - 11, w - 24, 19), Color(0.47, 0.71, 0.86, 0.09), true)
+		var name_col := Color(0.84, 0.9, 0.94) if u.alive else Color(0.38, 0.43, 0.47)
+		if is_me:
+			name_col = Color("#ffd24a")
+		var nm: String = ("你" if u.is_player else u.unit_name)
+		if u.is_commander:
+			nm = "★ " + nm
+		elif u.is_squad_leader:
+			nm = "▲ " + nm
+		layer_root.draw_string(font, Vector2(x + 4, ry), nm,
+			HORIZONTAL_ALIGNMENT_LEFT, 190, 12, name_col)
+		layer_root.draw_string(font, Vector2(x + 232, ry), GameConfig.CLASS_NAME_CN[u.op_class],
+			HORIZONTAL_ALIGNMENT_LEFT, 60, 12, Color(0.62, 0.7, 0.76))
+		layer_root.draw_string(font, Vector2(x + 300, ry), str(u.kills),
+			HORIZONTAL_ALIGNMENT_LEFT, 24, 12, Color(0.72, 0.8, 0.86))
+		layer_root.draw_string(font, Vector2(x + 328, ry), str(u.deaths),
+			HORIZONTAL_ALIGNMENT_LEFT, 24, 12, Color(0.5, 0.59, 0.66))
+		layer_root.draw_string(font, Vector2(x + 360, ry), str(int(u.damage_done)),
+			HORIZONTAL_ALIGNMENT_LEFT, 80, 12, Color(0.72, 0.8, 0.86))
+		layer_root.draw_string(font, Vector2(x + 452, ry), str(int(u.score)),
+			HORIZONTAL_ALIGNMENT_LEFT, 70, 12, name_col)
+		ry += 20.0
+	# 载具单列一节：它们是团队资产而不是某个人的战绩，混进干员榜会打乱排序
+	ry += 6.0
+	layer_root.draw_string(font, Vector2(x + 4, ry), "装甲",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.45, 0.53, 0.6))
+	ry += 18.0
+	for v in TeamManager.vehicles:
+		if not is_instance_valid(v) or v.team != team:
+			continue
+		var st: String = "在场" if v.alive else "损毁  %.0fs" % maxf(0.0, v.respawn_timer)
+		var vc: Color = Color(0.72, 0.8, 0.86) if v.alive else Color(0.38, 0.43, 0.47)
+		layer_root.draw_string(font, Vector2(x + 4, ry),
+			v.display_name() + ("（你驾驶）" if v.has_player_driver() else ""),
+			HORIZONTAL_ALIGNMENT_LEFT, 220, 12, vc)
+		layer_root.draw_string(font, Vector2(x + 300, ry), "%d / %d" % [int(v.hp), int(v.max_hp)],
+			HORIZONTAL_ALIGNMENT_LEFT, 90, 12, vc)
+		layer_root.draw_string(font, Vector2(x + 400, ry), st,
+			HORIZONTAL_ALIGNMENT_LEFT, 110, 12, vc)
+		ry += 20.0
