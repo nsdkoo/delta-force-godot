@@ -63,6 +63,11 @@ func _ready() -> void:
 	# 命令行 `-- --scoreboard`：强制展开计分板（截图用）
 	if args.has("--scoreboard"):
 		hud.force_scoreboard = true
+	# 命令行 `-- --offscreen`：把窗口挪到屏幕外再截屏。
+	# 教练在打真游戏的时候，任何弹到前台来的窗口都会把他切出对局 ——
+	# 挪到屏幕外既能正常渲染（截图不走样），又不会盖住他的画面
+	if args.has("--offscreen"):
+		DisplayServer.window_set_position(Vector2i(2600, 60))
 	# 命令行 `-- --zoom=3`：把相机推近，用于逐像素检查单位与建筑的描边（美术走查用）
 	for a in args:
 		if a.begins_with("--zoom="):

@@ -328,6 +328,33 @@ const FORTIFICATIONS := {
 	},
 }
 
+
+# ---------------------------------------------------------------- 地图
+## 四张地图，各自带一个"打出来才生效"的机制。
+## 这些机制是胜者为王最有辨识度的部分：地图不是固定棋盘，
+## 会被炮火和玩家的操作改写 —— 攻防路线会变，据点数量会变
+const MAPS := {
+	"jinqu": {
+		"name": "烬区", "mechanic": "c1_missile",
+		"desc": "C1 厂房挨两发制导导弹后坍塌，转为进攻方默认基地，防守方无法夺回",
+	},
+	"linjiedian": {
+		"name": "临界点", "mechanic": "c1_neutral",
+		"desc": "C1 被两发导弹摧毁退出争夺；攻方兵力跌破 75 时，C2 正门旁炸开新路，提前解锁下一区域",
+	},
+	"panxue": {
+		"name": "攀升", "mechanic": "tower_collapse",
+		"desc": "D 区尖塔挨三轮轰炸后塌陷，开启地下据点 D2，攻方兵力转为无限",
+	},
+	"yuzhen": {
+		"name": "余震", "mechanic": "quake",
+		"desc": "B 点三次地震后大楼坍塌开出新路线；指挥官可拉闸人为提前触发",
+	},
+}
+
+static func map_name(id: String) -> String:
+	return MAPS.get(id, {}).get("name", id)
+
 # ---------------------------------------------------------------- 输入动作名
 const ACTIONS := {
 	"move_up": [KEY_W], "move_down": [KEY_S], "move_left": [KEY_A], "move_right": [KEY_D],

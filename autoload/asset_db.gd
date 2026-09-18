@@ -93,6 +93,12 @@ func _ready() -> void:
 	_load_dir(DIR_FX, FX_TEXTURES, "fx_")
 	_load_dir(DIR_KTILE, K_TILES, "kt_")
 	_load_dir(DIR_KFX, K_FX, "kf_")
+	# 地形砖：Ground 区域平铺用（Tower Defense 包）
+	for n in ["ground_grass", "ground_grass_b", "ground_grass_c", "ground_dirt",
+			"ground_dirt_b", "ground_dirt_c", "ground_sand", "ground_sand_b",
+			"ground_stone", "ground_stone_b", "ground_stone_c",
+			"patch_grass_round", "decal_crater", "decal_scatter"]:
+		tex["gt_" + n] = _load("res://assets/kenney/ground/" + n + ".png")
 	for n in K_HULLS:
 		tex["kh_" + n] = _load(DIR_KVEH + n + ".png")
 	for n in K_TURRETS:
@@ -190,6 +196,11 @@ func tile(name: String) -> Texture2D:
 	return tex.get("tile_" + name, null)
 
 # ---------------------------------------------------------------- Kenney 取用
+## 地形砖（Kenney Tower Defense，CC0）。draw_texture_rect 要平铺依赖
+## 画布项的 TEXTURE_REPEAT_ENABLED，调用方需要自己开
+func gtile(name: String) -> Texture2D:
+	return tex.get("gt_" + name, null)
+
 func ktile(name: String) -> Texture2D:
 	return tex.get("kt_" + name, null)
 

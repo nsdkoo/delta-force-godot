@@ -32,6 +32,7 @@ var nav_grid: AStarGrid2D
 var rng := RandomNumberGenerator.new()
 ## 卡通地景（纯装饰，不参与碰撞/导航/视线）
 var _fields: Array = []            ## {"pts","color"} 地形色块
+var _gtile_cache: Dictionary = {}  ## 地形砖缓存
 var terrain: Node2D = null         ## 地面绘制层（承接建筑投影）
 var _tufts: Array = []             ## {"pos","size","color"} 草丛
 var _rocks: Array = []             ## {"pos","size"} 石堆
@@ -59,6 +60,12 @@ func _ready() -> void:
 	_build_nav_grid()
 	# 地景装饰要等建筑与碰撞都建好之后再撒，否则会撒进墙里
 	_generate_terrain_fields()
+	for t in ["ground_grass", "ground_grass_b", "ground_grass_c", "ground_dirt",
+			"ground_dirt_b", "ground_dirt_c", "ground_sand", "ground_sand_b",
+			"ground_stone", "ground_stone_b", "ground_stone_c"]:
+		var tex := AssetDB.gtile(t)
+		if tex != null:
+			_gtile_cache[t] = tex
 	_generate_cartoon_decor()
 	print("[Jinqiu] 建筑 %d / 地物 %d(节点 %d) / 遮挡体 %d / 导航格 %d x %d / 可通行 %d"
 		% [buildings.size(), props.size(), props_root.get_child_count(),
@@ -226,6 +233,7 @@ func _bake_ground() -> void:
 	terrain.name = "Terrain"
 	terrain.z_index = -35
 	terrain.light_mask = RenderRig.LAYER_GROUND
+	terrain.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
 	terrain.draw.connect(_draw_terrain_fields)
 	add_child(terrain)
 
@@ -326,9 +334,39 @@ func _generate_terrain_fields() -> void:
 			pts.append(Vector2(x0 + rng.randf_range(-jt, jt), y0 + cell + rng.randf_range(-jt, jt)))
 			_fields.append({"pts": pts, "color": col})
 
+## 按区域平铺真地形砖。平铺顺序很重要：先铺整幅草地，再叠各功能区，
+## 最后用草地条盖住南北两条边 —— 和早先的分区逻辑一致，只是从
+## "多边形填色"换成了"贴图平铺"，地面从色块变成了有纹理的手绘砖
 func _draw_terrain_fields() -> void:
-	for f in _fields:
-		terrain.draw_colored_polygon(f["pts"], f["color"])
+	var W := GameConfig.WORLD_SIZE.x
+	var H := GameConfig.WORLD_SIZE.y
+	_tile_region(Rect2(0, 0, W, H), ["ground_grass", "ground_grass_b", "ground_grass_c"], 64.0)
+	_tile_region(Rect2(620, 300, 840, H - 600), ["ground_dirt", "ground_dirt_b", "ground_dirt_c"], 64.0)
+	_tile_region(Rect2(1460, 300, 900, H - 600), ["ground_sand", "ground_sand_b"], 64.0)
+	_tile_region(Rect2(2360, 300, 840, H - 600), ["ground_stone", "ground_stone_b", "ground_stone_c"], 64.0)
+	_tile_region(Rect2(3200, 300, W - 3200, H - 600), ["ground_dirt", "ground_dirt_b"], 64.0)
+	# 南北两条草地边最后盖上去，把功能区的直边藏掉
+	_tile_region(Rect2(0, 0, W, 300), ["ground_grass", "ground_grass_b"], 64.0)
+	_tile_region(Rect2(0, H - 300, W, 300), ["ground_grass", "ground_grass_c"], 64.0)
+
+## 用几款同族地砖随机混铺一块矩形区域。
+## 同一款砖平铺一大片会看出明显重复，混 2~3 款 + 随机镜像就看不出来了
+func _tile_region(rect: Rect2, tiles: Array, cell: float) -> void:
+	var pool: Array = []
+	for t in tiles:
+		if _gtile_cache.has(t):
+			pool.append(_gtile_cache[t])
+	var cols := int(ceil(rect.size.x / cell))
+	var rows := int(ceil(rect.size.y / cell))
+	for iy in rows:
+		for ix in cols:
+			if pool.is_empty():
+				return
+			var tex: Texture2D = pool[rng.randi() % pool.size()]
+			var pos := rect.position + Vector2(float(ix) * cell, float(iy) * cell)
+			var flip := rng.randf() < 0.5
+			terrain.draw_texture_rect(tex, Rect2(pos, Vector2(cell, cell)), false,
+				Color.WHITE, flip)
 
 # ============================================================ 道路
 func _draw_roads() -> void:
