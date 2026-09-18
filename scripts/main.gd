@@ -241,7 +241,11 @@ func _run_elect() -> void:
 # ============================================================ 部署
 func _build_deploy_ui() -> void:
 	MatchState.set_phase(GameConfig.Phase.DEPLOY)
-	var panel := _make_panel("部署", "选择干员与部署点后进入战场", 880.0, 640.0)
+	# 面板高度必须够装下九宫格 + 出生点 + 进场按钮。
+	# 九宫格 3 行 x 128 + 2 x 8 间距 = 400，从 y=126 开始到 y=526 才结束，
+	# 所以出生点那一组只能排在 540 之后 —— 之前把它写死在 486，
+	# 直接压在了第三排（露娜/银翼/麦小文）上
+	var panel := _make_panel("部署", "选择干员与部署点后进入战场", 880.0, 716.0)
 	var role := Label.new()
 	role.text = "你已被票选为 GTI 指挥官 · 按 5/6 放技能、7/8 呼叫重火力、B 架设工事" 		if MatchState.player_is_commander 		else "你是 GTI 小队队员 · 按指挥官的战术标记行动"
 	role.position = Vector2(30, 96)
@@ -253,8 +257,8 @@ func _build_deploy_ui() -> void:
 	# 所以同一兵种下必须真的有得选，"职业搭配"才不是一句空话
 	var grid := GridContainer.new()
 	grid.columns = 3
-	grid.position = Vector2(30, 130)
-	grid.size = Vector2(820, 420)
+	grid.position = Vector2(30, 126)
+	grid.size = Vector2(820, 400)
 	grid.add_theme_constant_override("h_separation", 8)
 	grid.add_theme_constant_override("v_separation", 8)
 	panel.add_child(grid)
@@ -284,11 +288,11 @@ HP %d  机动 %d%%" % [
 
 	var spawn_label := Label.new()
 	spawn_label.text = "部署点"
-	spawn_label.position = Vector2(30, 486)
+	spawn_label.position = Vector2(30, 546)
 	spawn_label.add_theme_font_size_override("font_size", 14)
 	panel.add_child(spawn_label)
 	var spawn_box := HBoxContainer.new()
-	spawn_box.position = Vector2(30, 512)
+	spawn_box.position = Vector2(30, 572)
 	spawn_box.add_theme_constant_override("separation", 10)
 	panel.add_child(spawn_box)
 	var opts := ["GTI 前沿基地", "前线集结点"]
@@ -303,7 +307,7 @@ HP %d  机动 %d%%" % [
 	var go := Button.new()
 	go.text = "进 入 战 场"
 	go.custom_minimum_size = Vector2(820, 54)
-	go.position = Vector2(30, 566)
+	go.position = Vector2(30, 632)
 	go.pressed.connect(func():
 		panel.queue_free()
 		_start_match())
