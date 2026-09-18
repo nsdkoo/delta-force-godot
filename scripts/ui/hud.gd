@@ -142,9 +142,20 @@ func _draw_hud() -> void:
 	_draw_rescue(vp, player)
 	_draw_marks(vp)
 	_draw_ops(vp)
+	_draw_version(vp)
 	# 计分板压在最上层：它是按住才会出现的临时界面
 	if force_scoreboard or Input.is_action_pressed("scoreboard"):
 		_draw_scoreboard(vp, player)
+
+## 版本角标 + 帧率。放在最角落、字号最小：它是给排障用的，不是给玩家看的
+func _draw_version(vp: Vector2) -> void:
+	if UserSettings.show_fps:
+		var fps := int(round(Engine.get_frames_per_second()))
+		layer_root.draw_string(font, Vector2(10, vp.y - 24), "%d FPS" % fps,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12,
+			Color("#57e08a") if fps >= 55 else (Color("#ffd24a") if fps >= 35 else Color("#ff5b4a")))
+	layer_root.draw_string(font, Vector2(10, vp.y - 8),
+		"v%s" % AppState.VERSION, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Palette.UI_TEXT_DIM)
 
 # ============================================================ 倒地与救援
 ## 倒地是"还能救回来的一段时间"，所以它必须在画面上有明确的读秒与入口提示，

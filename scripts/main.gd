@@ -2,12 +2,15 @@ extends Node2D
 ## ============================================================================
 ## Main · 应用入口与流程编排
 ## ----------------------------------------------------------------------------
-## ELECT（指挥官选举）-> DEPLOY（干员与部署点）-> FIGHT -> RESULT
-## 每个阶段由一段独立的 UI 负责，Main 只做切换。
+## 应用外壳（主菜单/设置/暂停）由 AppShell 负责，对局内部流程由这里编排：
+##   BOOT -> MAIN_MENU -> ELECT -> DEPLOY -> FIGHT -> RESULT
+## 两套状态分开：AppState 管"应用级"，MatchState.phase 管"对局级"。
+## 这样暂停菜单能冻结对局，而主菜单背后的战场还能继续跑（attract mode）。
 ## ============================================================================
 
 const WorldScene := preload("res://scenes/world/Jinqiu.tscn")
 const SelftestScript := preload("res://scripts/systems/selftest.gd")
+const AppShellScript := preload("res://scripts/ui/app_shell.gd")
 
 var world: Node2D = null
 var battle: BattleManager = null
@@ -15,6 +18,7 @@ var hud: HUD = null
 var player_ctrl: PlayerController = null
 var ui_root: Control = null
 var ui_layer: CanvasLayer = null
+var shell: CanvasLayer = null
 
 var picked_op: String = "redwolf"
 var picked_spawn: int = 1
@@ -44,6 +48,8 @@ func _ready() -> void:
 	# 一份主题下发到整棵面板树：所有 Label / Button 自动拿到木牌金边与中文系统字体
 	ui_root.theme = UiTheme.build()
 	ui_layer.add_child(ui_root)
+	shell = AppShellScript.new()          ## 脚本继承 CanvasLayer，直接 new 才能拿到正确类型
+	add_child(shell)
 	EventBus.match_ended.connect(_on_match_ended)
 	_parse_shots()
 	var args := OS.get_cmdline_user_args()
@@ -67,9 +73,56 @@ func _ready() -> void:
 		return
 	# 命令行 `-- --auto` 跳过交互直接开打（用于自动化验证）
 	if args.has("--auto") or OS.get_cmdline_args().has("--auto"):
+		AppState.reset_to_boot()
+		AppState.goto(AppState.State.PLAYING)
 		_auto_start()
-	else:
-		_run_elect()
+		return
+	# 命令行 `-- --settings` / `-- --pause`：直接摆到对应界面（界面走查截图用）
+	if args.has("--settings"):
+		AppState.reset_to_boot()
+		hud.visible = false
+		player_ctrl.shell_mode = true
+		AppState.goto(AppState.State.MAIN_MENU)
+		AppState.goto(AppState.State.SETTINGS)
+		return
+	if args.has("--pause"):
+		AppState.reset_to_boot()
+		AppState.goto(AppState.State.PLAYING)
+		_auto_start()
+		await get_tree().create_timer(3.0).timeout
+		AppState.goto(AppState.State.PAUSED)
+		return
+	# 默认路径：先进主菜单。战场已经装配好并在后台跑着，作为菜单的实时背景
+	AppState.reset_to_boot()
+	hud.visible = false
+	player_ctrl.shell_mode = true
+	AppState.goto(AppState.State.MAIN_MENU)
+
+# ============================================================ 外壳回调
+## 主菜单点"开始游戏"
+func begin_new_match() -> void:
+	shell.clear()
+	hud.visible = true
+	player_ctrl.shell_mode = false
+	# 相机交还给玩法：先推回正常缩放，否则菜单的 attract 缩放会留到开局
+	player_ctrl.zoom_override = _demo_zoom
+	AppState.goto(AppState.State.BRIEFING)
+	_run_elect()
+
+## 暂停页点"返回主菜单"：直接重载场景。
+## 对局里改过的东西太多（单位、载具、工事、指挥部状态），逐个回滚一定漏；
+## 重载场景是唯一能保证"干净回到主菜单"的做法
+func back_to_menu() -> void:
+	get_tree().paused = false
+	get_tree().reload_current_scene()
+
+## Esc：对局中开暂停菜单。主菜单/设置页不响应（那两个页面有自己的返回按钮）
+func _unhandled_input(event: InputEvent) -> void:
+	if not event.is_action_pressed("cancel"):
+		return
+	if AppState.state == AppState.State.PLAYING:
+		AppState.goto(AppState.State.PAUSED)
+		get_viewport().set_input_as_handled()
 
 ## 演示场景：把玩家放进载具并推到"8 连杀 · 空袭待呼叫"，
 ## 这样一张截图里同时能看到载具面板、连杀条与支援提示。
@@ -338,6 +391,7 @@ func _start_match() -> void:
 			vk[v.display_name()] = int(vk.get(v.display_name(), 0)) + 1
 	print("[Main] 战斗开始 · 干员 %s · 出生 %s · 载具 %s" % [
 		GameConfig.op(picked_op)["name"], pos, str(vk)])
+	AppState.goto(AppState.State.PLAYING)
 
 # ============================================================ 结算
 ## 结算详情页：个人战绩 + 双方对比。

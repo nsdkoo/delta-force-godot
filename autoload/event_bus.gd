@@ -69,3 +69,7 @@ signal banner(text: String, color: Color, duration: float)
 signal feed(text: String, color: Color)
 signal toast(text: String, color: Color)
 signal score_changed(unit: Node2D)
+
+# ---------------------------------------------------------------- 应用级
+## 应用外壳的状态（主菜单 / 设置 / 对局中 …），见 AppState
+signal app_state_changed(state: int)

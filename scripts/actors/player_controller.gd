@@ -22,6 +22,9 @@ var last_damage_flash := 0.0
 ## 调试用：大于 0 时压过步行/驾驶的常规缩放。
 ## 美术走查需要把镜头推到很近看单个单位的描边，正常玩法不需要这个。
 var zoom_override: float = 0.0
+## 产品外壳接管标志：主菜单期间由 AppShell 驱动相机（attract mode），
+## 这里只负责"不读输入、不抢相机"。开关由 main.gd 在进/出菜单时设置。
+var shell_mode: bool = false
 
 func attach(p_soldier: Soldier, p_camera: Camera2D) -> void:
 	soldier = p_soldier
@@ -31,6 +34,12 @@ func attach(p_soldier: Soldier, p_camera: Camera2D) -> void:
 
 func _physics_process(delta: float) -> void:
 	if soldier == null or not is_instance_valid(soldier):
+		return
+
+	# 主菜单期间把控制权整个让出去：相机归 AppShell，输入不读。
+	# 少了这一步，玩家在菜单里按 WASD 会在背后动来动去，菜单就"不干净"了
+	if shell_mode:
+		_apply_camera(delta, true)
 		return
 
 	# 静音是全局开关，跟步兵/驾驶状态无关，所以放在状态判断之前
@@ -52,6 +61,24 @@ func _physics_process(delta: float) -> void:
 		soldier.sprinting = false
 		return
 	_move_on_foot(delta)
+
+## 相机：跟随 + 缩放 + 震屏偏移。
+## attract 为真时不做跟随（跟随归 AppShell 的 attract mode）。
+## base_zoom 用于驾驶时的拉远视角。
+## 震屏用 camera.offset 而不是改 global_position —— offset 是纯表现层的
+## 偏移，不会和跟随逻辑互相打架，也不用担心把镜头推出世界边界
+func _apply_camera(delta: float, attract: bool, base_zoom: float = 0.0) -> void:
+	if camera == null:
+		return
+	if not attract:
+		var target := soldier.global_position + soldier.aim_dir * 90.0
+		camera.global_position = camera.global_position.lerp(target, clampf(delta * 7.0, 0.0, 1.0))
+	var z := zoom_override if zoom_override > 0.0 else (
+		1.24 if soldier.aiming_down_sight else (base_zoom if base_zoom > 0.0 else 1.06))
+	if attract:
+		z = 1.15
+	camera.zoom = camera.zoom.lerp(Vector2.ONE * z, clampf(delta * 8.0, 0.0, 1.0))
+	camera.offset = ImpactFx.offset()
 
 # ============================================================ 步行
 func _move_on_foot(delta: float) -> void:
@@ -98,8 +125,7 @@ func _move_on_foot(delta: float) -> void:
 	if camera != null:
 		var target := soldier.global_position + soldier.aim_dir * 90.0
 		camera.global_position = camera.global_position.lerp(target, clampf(delta * 7.0, 0.0, 1.0))
-		var z := zoom_override if zoom_override > 0.0 else (1.24 if soldier.aiming_down_sight else 1.06)
-		camera.zoom = camera.zoom.lerp(Vector2.ONE * z, clampf(delta * 8.0, 0.0, 1.0))
+		_apply_camera(delta, false)
 
 ## 拖拽救援开关。G 按下即抓、再按松开；走远了会自动断
 func _toggle_rescue() -> void:
@@ -178,8 +204,7 @@ func _drive_vehicle(delta: float) -> void:
 	if camera != null:
 		camera.global_position = camera.global_position.lerp(vehicle.global_position,
 			clampf(delta * 5.0, 0.0, 1.0))
-		var zv := zoom_override if zoom_override > 0.0 else 0.86
-		camera.zoom = camera.zoom.lerp(Vector2.ONE * zv, clampf(delta * 4.0, 0.0, 1.0))
+		_apply_camera(delta, false, 0.86)
 
 # ============================================================ 技能
 func _use_skill() -> void:

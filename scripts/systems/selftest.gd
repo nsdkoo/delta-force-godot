@@ -64,12 +64,19 @@ func _test_rescue(p: Soldier) -> void:
 	_check("倒地单位不计入存活", not TeamManager.alive_units().has(target))
 	_check("倒地单位出现在待救援列表", TeamManager.downed_units().has(target))
 
-	# 挪到己方基地后方再拖：前线救人会被敌人重新打倒，
-	# "救起来了"和"刚救起又被打倒"两种结果会让断言随机失败
-	var safe: Vector2 = GameConfig.BASE_POS[GameConfig.Team.GTI] + Vector2(60.0, 260.0)
+	# 挪到地图一个偏远的空角再拖。两个原因：
+	#   1) 前线救人会被敌人重新打倒，"救起来了"和"刚救起又被打倒"会让断言随机失败
+	#   2) 己方的支援兵 AI 也会主动去救人，目标可能在玩家下手之前就被队友拖走了
+	# 偏远角落两个问题一起解决
+	var safe := Vector2(300.0, 300.0)
+	target.alive = true
+	target.downed = true
+	target.hp = 0.0
+	target.dragging_by = null
+	target.revive_progress = 0.0
 	p.global_position = safe
 	target.global_position = safe + Vector2(36.0, 0.0)
-	await _wait(3)
+	await _wait(2)
 	_check("拖拽救援开始", p.start_drag(target) and target.dragging_by == p)
 	var need := GameConfig.REVIVE_TIME + 0.4
 	await _seconds(need)

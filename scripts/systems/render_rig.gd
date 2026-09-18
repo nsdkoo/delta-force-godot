@@ -93,6 +93,13 @@ func _build_environment() -> void:
 	# 辉光只作用到世界层，HUD 所在 CanvasLayer（layer >= 1）不受影响
 	_env.background_canvas_max_layer = 0
 
+	# 辉光是画质开关里最重的一项（HDR + 多级模糊），设置页里必须能关。
+	# 关掉之后枪焰与爆炸不再有光晕，但帧率在中低端机器上会明显好转
+	_env.glow_enabled = _env.glow_enabled and UserSettings.glow_enabled
+	UserSettings.changed.connect(func():
+		_env.glow_enabled = UserSettings.glow_enabled
+		world_env.environment = _env)
+
 	world_env = WorldEnvironment.new()
 	world_env.name = "WorldEnvironment"
 	world_env.environment = _env
