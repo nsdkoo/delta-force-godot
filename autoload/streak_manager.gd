@@ -27,7 +27,7 @@ var _queue: Array = []                 ## {"at","pos","radius","inf_dmg","veh_dm
 var _applying_support: bool = false
 
 func _ready() -> void:
-	EventBus.unit_died.connect(_on_unit_died)
+	EventBus.unit_downed.connect(_on_unit_downed)
 	EventBus.player_streak_changed.connect(_on_streak_changed)
 	EventBus.match_started.connect(reset)
 
@@ -39,7 +39,9 @@ func reset() -> void:
 	_applying_support = false
 
 # ============================================================ 计数
-func _on_unit_died(_victim: Node2D, killer: Node2D, _headshot: bool) -> void:
+## 连杀按"击倒"计，不按"流血至死"计。加了拖拽救援之后这两件事会分开：
+## 现在把敌人打倒是击杀，之后他被救起来还是流血死掉都不再重复计数
+func _on_unit_downed(_victim: Node2D, killer: Node2D, _bleed_out: float) -> void:
 	if _applying_support:
 		return
 	if killer == null or not is_instance_valid(killer) or not killer.is_player:
@@ -85,6 +87,13 @@ func support_label() -> String:
 ## 还在空中、尚未落地的弹数（HUD 与自检用）
 func pending_strikes() -> int:
 	return _queue.size()
+
+## 排队一发间瞄火力。连杀支援与指挥官的炮兵/导弹都走这里 ——
+## 只有一条落弹链路，"支援击杀不计入连杀"这条规则才只需要维护一处
+func queue_fire_mission(pos: Vector2, radius: float, inf_dmg: float, veh_dmg: float,
+		scale: float, delay: float, owner: Soldier) -> void:
+	_queue.append({"at": _clock + delay, "pos": pos, "radius": radius,
+		"inf_dmg": inf_dmg, "veh_dmg": veh_dmg, "scale": scale, "owner": owner})
 
 # ============================================================ 呼叫
 func _process(delta: float) -> void:
@@ -223,6 +232,16 @@ func _detonate(e: Dictionary) -> void:
 		var d := pos.distance_to(v.global_position)
 		if d <= radius + 40.0:
 			v.take_damage(float(e["veh_dmg"]) * (1.0 - d / (radius + 40.0)), owner)
+	# 工事也该能吃间瞄火力，否则指挥官的重火力对"架好的阵地"完全无效
+	for t in 2:
+		var f = CommandOps.forts[t]
+		if f == null or not is_instance_valid(f) or not f.alive:
+			continue
+		if owner != null and is_instance_valid(owner) and f.team == owner.team:
+			continue
+		var df := pos.distance_to(f.global_position)
+		if df <= radius + 30.0:
+			f.take_damage(float(e["veh_dmg"]) * 2.0 * (1.0 - df / (radius + 30.0)), owner)
 	_applying_support = false
 
 func _listener() -> Vector2:

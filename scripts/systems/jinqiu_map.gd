@@ -31,7 +31,8 @@ var stains: Array = []             ## {"kind": String, "pos": Vector2, "rot": fl
 var nav_grid: AStarGrid2D
 var rng := RandomNumberGenerator.new()
 ## 卡通地景（纯装饰，不参与碰撞/导航/视线）
-var _patches: Array = []           ## {"pts","color","alpha"} 地表色块
+var _fields: Array = []            ## {"pts","color"} 地形色块
+var terrain: Node2D = null         ## 地面绘制层（承接建筑投影）
 var _tufts: Array = []             ## {"pos","size","color"} 草丛
 var _rocks: Array = []             ## {"pos","size"} 石堆
 
@@ -39,6 +40,11 @@ const MissileScript := preload("res://scripts/projectiles/missile.gd")
 const GrenadeScript := preload("res://scripts/projectiles/grenade.gd")
 const MedkitScript := preload("res://scripts/systems/medkit.gd")
 const FxLayerScript := preload("res://scripts/systems/fx_layer.gd")
+
+## 是否使用旧的照片级烘焙地表。默认关闭：它和"平涂 + 描边"的卡通风格拼在
+## 一起会有强烈的两个世界感（照片质感的地面 vs 色块化的建筑）。
+## 需要写实风时打开这个开关即可，法线与光照链路都还在
+const USE_BAKED_GROUND := false
 
 func _ready() -> void:
 	add_to_group("world_map")
@@ -52,7 +58,7 @@ func _ready() -> void:
 	_build_obstacles()
 	_build_nav_grid()
 	# 地景装饰要等建筑与碰撞都建好之后再撒，否则会撒进墙里
-	_generate_ground_patches()
+	_generate_terrain_fields()
 	_generate_cartoon_decor()
 	print("[Jinqiu] 建筑 %d / 地物 %d(节点 %d) / 遮挡体 %d / 导航格 %d x %d / 可通行 %d"
 		% [buildings.size(), props.size(), props_root.get_child_count(),
@@ -192,7 +198,6 @@ func _create_layers() -> void:
 ## 绘制入口：道路与地物贴地，建筑最后画压在最上层。
 ## 本节点 light_mask = 0（见 _create_layers），受光的地表是独立的地面 Sprite。
 func _draw() -> void:
-	_draw_ground_patches()
 	_draw_roads()
 	_draw_cartoon_decor()
 	_draw_decor()
@@ -209,39 +214,63 @@ func _draw() -> void:
 ##
 ## 贴图缺失时退化为纯色沙地，保证项目在任何情况下都能起来。
 func _bake_ground() -> void:
+	var cpath := "res://assets/terrain/ground_color.jpg"
+	if USE_BAKED_GROUND and ResourceLoader.exists(cpath):
+		_build_baked_ground(cpath)
+	else:
+		_build_flat_ground()
+	_build_ground_base()
+	# 地面绘制节点：地形色块画在这一层，light_mask 指到地面层，
+	# 这样建筑的投影才会落在色块上（画在 map 自己的 _draw 里就收不到阴影）
+	terrain = Node2D.new()
+	terrain.name = "Terrain"
+	terrain.z_index = -35
+	terrain.light_mask = RenderRig.LAYER_GROUND
+	terrain.draw.connect(_draw_terrain_fields)
+	add_child(terrain)
+
+## 平涂地表：一张 2x2 的纯色 + 一张平法线。
+## 平法线是必须的 —— 没有法线贴图的画布项在 DirectionalLight2D(ADD) 下会被
+## 整块加亮到过曝；给一张 (128,128,255) 的法线之后 N·L 是常数，
+## 地面只是均匀受光，而建筑遮挡体投下的阴影照常生效
+func _build_flat_ground() -> void:
+	var im := Image.create_empty(2, 2, false, Image.FORMAT_RGBA8)
+	im.fill(Palette.SAND)
+	var nm := Image.create_empty(2, 2, false, Image.FORMAT_RGBA8)
+	nm.fill(Color(0.5, 0.5, 1.0))
+	var tex := CanvasTexture.new()
+	tex.diffuse_texture = ImageTexture.create_from_image(im)
+	tex.normal_texture = ImageTexture.create_from_image(nm)
 	ground = Sprite2D.new()
 	ground.name = "Ground"
 	ground.z_index = -30
 	ground.centered = false
 	ground.light_mask = RenderRig.LAYER_GROUND
-	ground.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-	var cpath := "res://assets/terrain/ground_color.jpg"
-	var npath := "res://assets/terrain/ground_normal.jpg"
-	if ResourceLoader.exists(cpath):
-		var tex := CanvasTexture.new()
-		tex.diffuse_texture = load(cpath)
-		if ResourceLoader.exists(npath):
-			tex.normal_texture = load(npath)
-		ground.texture = tex
-		var d: Texture2D = tex.diffuse_texture
-		ground.scale = Vector2(GameConfig.WORLD_SIZE.x / float(d.get_width()),
-			GameConfig.WORLD_SIZE.y / float(d.get_height()))
-		# 地表走"真烘焙 + 上层手绘色块"，而不是给地面挂自定义着色器：
-		# 实测给地面挂 canvas_item 着色器之后，这张地表的 Light2D 贡献会整个消失
-		# （把着色器参数全部置成无操作也一样），画面立刻暗一大截、太阳高光带也没了。
-		# 所以风格化改在绘制层做，法线贴图与真实光照原样保留。
-	else:
-		push_warning("[Jinqiu] 缺少烘焙地表贴图，回退为纯色沙地。请先运行 _bake_terrain.py")
-		var im := Image.create_empty(4, 4, false, Image.FORMAT_RGB8)
-		im.fill(Palette.SAND_DARK)
-		ground.texture = ImageTexture.create_from_image(im)
-		ground.scale = Vector2(GameConfig.WORLD_SIZE.x / 4.0, GameConfig.WORLD_SIZE.y / 4.0)
+	ground.texture = tex
+	ground.scale = Vector2(GameConfig.WORLD_SIZE.x / 2.0, GameConfig.WORLD_SIZE.y / 2.0)
 	add_child(ground)
-	_build_ground_base()
 
-## 兜底底色：烘焙地表只有 2048x1400，铺不满 3800x2600 的战场，
-## 缺口位置会露出默认清屏色（近黑），四个角看起来像世界破了洞。
-## 这里在最底层垫一块整幅的平涂沙色，缺口就变成"同一片地"了。
+## 旧的烘焙写实地表。保留实现但默认关闭：它和"平涂 + 描边"的卡通风格
+## 拼在一起会有强烈的两个世界感（照片质感的地面 vs 色块化的建筑），
+## 需要写实风时把 USE_BAKED_GROUND 打开即可，法线与光照链路都还在
+func _build_baked_ground(cpath: String) -> void:
+	var npath := "res://assets/terrain/ground_normal.jpg"
+	var tex := CanvasTexture.new()
+	tex.diffuse_texture = load(cpath)
+	if ResourceLoader.exists(npath):
+		tex.normal_texture = load(npath)
+	ground = Sprite2D.new()
+	ground.name = "Ground"
+	ground.z_index = -30
+	ground.centered = false
+	ground.light_mask = RenderRig.LAYER_GROUND
+	ground.texture = tex
+	var d: Texture2D = tex.diffuse_texture
+	ground.scale = Vector2(GameConfig.WORLD_SIZE.x / float(d.get_width()),
+		GameConfig.WORLD_SIZE.y / float(d.get_height()))
+	add_child(ground)
+
+## 兜底底色：所有其他图层之下先垫一层平涂沙色
 func _build_ground_base() -> void:
 	var im := Image.create_empty(2, 2, false, Image.FORMAT_RGBA8)
 	im.fill(Palette.SAND)
@@ -254,10 +283,58 @@ func _build_ground_base() -> void:
 	base.scale = Vector2(GameConfig.WORLD_SIZE.x / 2.0, GameConfig.WORLD_SIZE.y / 2.0)
 	add_child(base)
 
+# ============================================================ 地形
+## 按区域决定这一格是什么地貌：西侧外围荒地是草，A 村是土，B 段是沙，
+## C 城区是石板，东侧守方基地回到土。分区和 README 里的地图结构一一对应
+func _terrain_of(cx: float, cy: float) -> Color:
+	if cy < 300.0 or cy > GameConfig.WORLD_SIZE.y - 300.0:
+		return Palette.GRASS_DARK
+	if cx < 620.0:
+		return Palette.GRASS_DARK if rng.randf() < 0.62 else Palette.GRASS
+	if cx < 1460.0:
+		return Palette.DIRT
+	if cx < 2360.0:
+		return Palette.SAND_DARK
+	if cx < 3200.0:
+		return Palette.ROCK
+	return Palette.DIRT
+
+## 地形色块：按格铺，每格边缘做抖动，形成"手绘分区"的边界。
+## 关键是不重叠 —— 早先用一堆大半径半透明椭圆乱叠，颜色互相乘算，
+## 最后整张地表是发暗的泥色。分区铺满、每格只有一层，颜色才是干净的
+func _generate_terrain_fields() -> void:
+	_fields.clear()
+	var cell := 190.0
+	var cols := int(ceil(GameConfig.WORLD_SIZE.x / cell))
+	var rows := int(ceil(GameConfig.WORLD_SIZE.y / cell))
+	for gy in rows:
+		for gx in cols:
+			var cx := (float(gx) + 0.5) * cell
+			var cy := (float(gy) + 0.5) * cell
+			var col := _terrain_of(cx, cy)
+			# 同色格之间做极轻的明度抖动，避免整片死板
+			var j := rng.randf_range(-0.045, 0.045)
+			col = Color(clampf(col.r + j, 0, 1), clampf(col.g + j, 0, 1), clampf(col.b + j, 0, 1))
+			var pts := PackedVector2Array()
+			var x0 := float(gx) * cell
+			var y0 := float(gy) * cell
+			# 四角各抖一点，格子之间仍严丝合缝（共用角点抖动值）
+			var jt := cell * 0.16
+			pts.append(Vector2(x0 + rng.randf_range(-jt, jt), y0 + rng.randf_range(-jt, jt)))
+			pts.append(Vector2(x0 + cell + rng.randf_range(-jt, jt), y0 + rng.randf_range(-jt, jt)))
+			pts.append(Vector2(x0 + cell + rng.randf_range(-jt, jt), y0 + cell + rng.randf_range(-jt, jt)))
+			pts.append(Vector2(x0 + rng.randf_range(-jt, jt), y0 + cell + rng.randf_range(-jt, jt)))
+			_fields.append({"pts": pts, "color": col})
+
+func _draw_terrain_fields() -> void:
+	for f in _fields:
+		terrain.draw_colored_polygon(f["pts"], f["color"])
+
 # ============================================================ 道路
 func _draw_roads() -> void:
 	var col_base := Palette.ROAD
 	var col_dark := Palette.ROAD_DARK
+	# 道路整体压暗一档，让它从平涂地里"沉"下去而不是浮在上面
 	# 东西主干道
 	_draw_road_band(Rect2(0, 1230, GameConfig.WORLD_SIZE.x, 150), true, false, col_base, col_dark)
 	# 三条南北街道
@@ -297,39 +374,6 @@ func _draw_road_band(r: Rect2, horiz: bool, plain: bool, base: Color, dark: Colo
 			t += dash + gap
 
 # ============================================================ 卡通地景
-## 地表色块：大片平涂的不规则色斑，压住烘焙贴图的"照片感"。
-##
-## 烘焙地表是按真实 PBR 材质混出来的，细节密度很高、过渡很连续，单独看很真实，
-## 但和旁边描边平涂的建筑放一起就不像一个世界的东西。这里在地表之上盖一层
-## 低透明度的不规则色块，把连续过渡打断成"几块颜色"，照片感就被压下去了。
-##
-## 透明度控制在 0.22~0.40：太透盖不住，太实会把法线贴图打出来的地面起伏也糊掉。
-func _generate_ground_patches() -> void:
-	_patches.clear()
-	var kinds := [
-		{"color": Palette.SAND, "alpha": 0.30, "r": [180.0, 420.0], "n": 34},
-		{"color": Palette.DIRT, "alpha": 0.26, "r": [150.0, 360.0], "n": 26},
-		{"color": Palette.GRASS, "alpha": 0.22, "r": [200.0, 460.0], "n": 22},
-	]
-	for k in kinds:
-		for i in int(k["n"]):
-			var c := Vector2(rng.randf_range(-100.0, GameConfig.WORLD_SIZE.x + 100.0),
-				rng.randf_range(-100.0, GameConfig.WORLD_SIZE.y + 100.0))
-			var rad: float = rng.randf_range(k["r"][0], k["r"][1])
-			var pts := PackedVector2Array()
-			var seg := 11
-			for j in seg:
-				var a := TAU * float(j) / float(seg)
-				# 半径抖动出不规则边，但抖动幅度压住，避免变成星星形状
-				var rr := rad * rng.randf_range(0.72, 1.22)
-				pts.append(c + Vector2(cos(a), sin(a) * 0.78) * rr)
-			_patches.append({"pts": pts, "color": k["color"], "alpha": k["alpha"]})
-
-func _draw_ground_patches() -> void:
-	for p in _patches:
-		var c: Color = p["color"]
-		draw_colored_polygon(p["pts"], Color(c.r, c.g, c.b, p["alpha"]))
-
 ## 纯绘制的地景装饰：草丛、石堆、灌木。
 ## 这些东西不参与碰撞、不进导航网格、也不阻挡视线 —— 它们唯一的职责是让大片
 ## 平涂地表有细节可看。全部用固定种子的随机数生成，所以每次开局长得一样。
@@ -402,13 +446,48 @@ func _generate_props() -> void:
 			"kind": "scorch",
 			"pos": Vector2(620 + rng.randi_range(0, 2700), 220 + rng.randi_range(0, 2160)),
 			"rot": rng.randf() * TAU, "size": rng.randf_range(70.0, 195.0)})
-	# 地物
-	for i in 44:
-		_add_prop("tree", Vector2(460 + rng.randi_range(0, 2960), 140 + rng.randi_range(0, 2320)), rng.randf_range(40.0, 78.0))
-	for i in 54:
-		_add_prop("barrel", Vector2(500 + rng.randi_range(0, 2900), 160 + rng.randi_range(0, 2280)), rng.randf_range(20.0, 29.0))
-	for i in 13:
-		_add_prop("wire", Vector2(560 + rng.randi_range(0, 2800), 180 + rng.randi_range(0, 2240)), rng.randf_range(0.85, 1.25))
+	# 地物。换成 Kenney 卡通素材之后种类从 3 种扩到 12 种 ——
+	# 手绘地物的最大问题是"一眼能看出是程序画的"：形状单调、重复感强。
+	# 现成素材包一次给齐乔木 / 灌木 / 岩石 / 油桶 / 木箱 / 拒马 / 沙袋 / 铁丝网，
+	# 混着撒就能把战场铺满细节，而且每种都有 2-3 个变体不会重复
+	_scatter("tree", 40, 40.0, 78.0)
+	_scatter("bush", 44, 26.0, 52.0)
+	_scatter("rock", 26, 22.0, 46.0)
+	_scatter("barrel", 52, 20.0, 28.0)
+	_scatter("crate", 22, 22.0, 32.0)
+	_scatter("barricade", 18, 22.0, 30.0)
+	_scatter("sandbag", 20, 26.0, 38.0)
+	_scatter("wire", 14, 0.9, 1.2)
+
+## 撒一批同类型地物。位置随机但避开建筑与道路
+func _scatter(kind: String, n: int, smin: float, smax: float) -> void:
+	for i in n:
+		var p := Vector2(rng.randf_range(420.0, 3380.0), rng.randf_range(140.0, 2460.0))
+		_add_prop(kind, p, rng.randf_range(smin, smax))
+
+## 地物贴图：同一种类里随机挑变体，避免整片战场长得一模一样
+func _prop_texture(kind: String) -> Texture2D:
+	var pool: Array = []
+	match kind:
+		"tree":
+			pool = ["tree_green_large", "tree_green_small", "tree_brown_large", "tree_brown_small"]
+		"bush":
+			pool = ["bush_large", "bush_small"]
+		"rock":
+			pool = ["rock_large", "rock_small"]
+		"barrel":
+			pool = ["barrel_rust", "barrel_green", "barrel_red", "barrel_black"]
+		"crate":
+			pool = ["crate_wood", "crate_metal"]
+		"barricade":
+			pool = ["barricade_wood", "barricade_metal"]
+		"sandbag":
+			pool = ["sandbag_beige", "sandbag_brown"]
+		"wire":
+			pool = ["wire_straight", "wire_crooked"]
+		_:
+			return null
+	return AssetDB.ktile(pool[rng.randi() % pool.size()])
 
 func _add_prop(kind: String, pos: Vector2, size: float) -> void:
 	if _solid_at(pos, 16.0):
@@ -417,7 +496,7 @@ func _add_prop(kind: String, pos: Vector2, size: float) -> void:
 
 func _draw_decor() -> void:
 	# 履带
-	var track_tex := AssetDB.tile("tracks")
+	var track_tex := AssetDB.ktile("tracks_large")
 	for t in tracks:
 		var from: Vector2 = t["from"]
 		var to: Vector2 = t["to"]
@@ -433,7 +512,7 @@ func _draw_decor() -> void:
 					Color(1, 1, 1, 0.24))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	for s in stains:
-		var tex := AssetDB.tile("oil_spill") if s["kind"] == "oil" else AssetDB.fx("scorch")
+		var tex := AssetDB.ktile("oil_large") if s["kind"] == "oil" else AssetDB.kfx("expsmoke_5")
 		if tex == null:
 			continue
 		var sz: float = s["size"]
@@ -457,30 +536,19 @@ func _build_prop_nodes() -> void:
 		var kind: String = p["kind"]
 		var pos: Vector2 = p["pos"]
 		var size: float = p["size"]
-		var tex: Texture2D = null
-		var rot: float = p["rot"]
-		match kind:
-			"tree":
-				tex = AssetDB.tile("tree_dry")
-			"barrel":
-				tex = AssetDB.tile("barrel_rust")
-				rot = 0.0
-			"wire":
-				tex = AssetDB.tile("wire")
-			_:
-				continue
+		var tex: Texture2D = _prop_texture(kind)
+		var rot: float = p["rot"] if kind != "barrel" and kind != "crate" and kind != "rock" else 0.0
 		if tex == null:
 			continue
 		var sp := Sprite2D.new()
 		sp.texture = tex
 		sp.position = pos
 		sp.rotation = rot
-		var k: float = size / AssetDB.logical_width(tex) if kind != "wire" else 1.0
+		# 铁丝网用原始尺寸（它是一条带子，按 size 缩放会变形）
+		var k: float = 1.0 if kind == "wire" else size / AssetDB.logical_width(tex)
 		sp.scale = Vector2(k, k)
-		if kind == "tree":
-			# 素材只有枯树。乘一层绿把枯黄压成叶色 —— 成本为零，
-			# 但沙色地面上终于能一眼看出"这里是树"
-			sp.modulate = Color(0.58, 0.98, 0.52)
+		# 这些素材本身没有描边版本，用共享描边材质补一圈，
+		# 和载具上"画进去的描边"接上同一种视觉语言
 		AssetDB.apply_outline(sp)
 		props_root.add_child(sp)
 
@@ -493,9 +561,11 @@ func _draw_prop_shadows() -> void:
 		var size: float = p["size"]
 		match kind:
 			"tree":
-				_ellipse_shadow(pos + Vector2(8, 11), size * 0.40, size * 0.26)
-			"barrel":
-				_ellipse_shadow(pos + Vector2(5, 7), size * 0.48, size * 0.32)
+				_ellipse_shadow(pos + Vector2(9, 12), size * 0.38, size * 0.24)
+			"bush", "rock":
+				_ellipse_shadow(pos + Vector2(4, 6), size * 0.40, size * 0.26)
+			"barrel", "crate", "barricade", "sandbag":
+				_ellipse_shadow(pos + Vector2(5, 7), size * 0.46, size * 0.30)
 
 func _ellipse_shadow(center: Vector2, rx: float, ry: float) -> void:
 	var pts := PackedVector2Array()
@@ -636,7 +706,10 @@ func _draw_one_building(b: Dictionary) -> void:
 	var height: float = b["height"]
 	var type: String = b["type"]
 	var c: Dictionary = Palette.BUILD.get(type, Palette.BUILD["house"])
-	var off := clampf(height * 23.0, 8.0, 120.0)
+	# 围墙/栅栏的高度要单独压住：它们是"半人高的矮墙"，按普通建筑的比例
+	# 拉起 55~87 像素之后会变成一片片竖着的木板，完全不像墙
+	var off := clampf(height * (9.0 if type == "fence" or type == "wall" else 23.0), 8.0,
+		34.0 if type == "fence" or type == "wall" else 120.0)
 	var sx := -off * 0.44
 	var sy := -off * 0.58
 	var p := r.position

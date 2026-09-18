@@ -85,6 +85,8 @@ func _move_on_foot(delta: float) -> void:
 	# --- 交互 ---
 	if Input.is_action_just_pressed("enter_vehicle"):
 		_try_board()
+	if Input.is_action_just_pressed("rescue"):
+		_toggle_rescue()
 	if Input.is_action_just_pressed("reload"):
 		soldier.start_reload()
 	if Input.is_action_just_pressed("skill"):
@@ -98,6 +100,21 @@ func _move_on_foot(delta: float) -> void:
 		camera.global_position = camera.global_position.lerp(target, clampf(delta * 7.0, 0.0, 1.0))
 		var z := zoom_override if zoom_override > 0.0 else (1.24 if soldier.aiming_down_sight else 1.06)
 		camera.zoom = camera.zoom.lerp(Vector2.ONE * z, clampf(delta * 8.0, 0.0, 1.0))
+
+## 拖拽救援开关。G 按下即抓、再按松开；走远了会自动断
+func _toggle_rescue() -> void:
+	if soldier.drag_target != null:
+		soldier.release_drag()
+		EventBus.toast.emit("已松开救援目标", Palette.UI_TEXT_DIM)
+		return
+	var t: Soldier = TeamManager.nearest_downed(soldier.global_position, soldier.team,
+		GameConfig.REVIVE_RANGE)
+	if t == null:
+		EventBus.toast.emit("附近没有需要救援的队友", Palette.UI_TEXT_DIM)
+		return
+	if soldier.start_drag(t):
+		EventBus.toast.emit("拖拽救援中 · 保持接触 %.0f 秒" % GameConfig.REVIVE_TIME,
+			Color("#57e08a"))
 
 # ============================================================ 驾驶
 func _try_board() -> void:
@@ -192,10 +209,12 @@ func _use_skill() -> void:
 				map.spawn_medkit(soldier)
 			EventBus.toast.emit("医疗包已投放", Color("#57e08a"))
 		GameConfig.OpClass.RECON:
+			# 标记时长与半径由干员被动决定（露娜拉长时长、银翼放大范围）
 			var n := 0
+			var until := Time.get_ticks_msec() / 1000.0 + soldier.spot_duration()
 			for u in TeamManager.alive_units():
-				if u.team != soldier.team and soldier.global_position.distance_to(u.global_position) < 1200.0:
-					u.set_meta("spotted_until", Time.get_ticks_msec() / 1000.0 + 7.0)
+				if u.team != soldier.team 						and soldier.global_position.distance_to(u.global_position) < soldier.spot_radius():
+					u.set_meta("spotted_until", until)
 					n += 1
 			EventBus.toast.emit("声波探测 · 标记 %d 个敌方目标" % n, Color("#8fc4ff"))
 	soldier.start_skill_cd()

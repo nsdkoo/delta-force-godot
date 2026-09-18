@@ -16,7 +16,7 @@ var player_ctrl: PlayerController = null
 var ui_root: Control = null
 var ui_layer: CanvasLayer = null
 
-var picked_class: int = GameConfig.OpClass.ASSAULT
+var picked_op: String = "redwolf"
 var picked_spawn: int = 1
 var _demo_zoom: float = 0.0
 
@@ -77,7 +77,7 @@ func _ready() -> void:
 func _demo_setup() -> void:
 	print("[Demo] 视口 %s · 窗口 %s" % [
 		str(get_viewport().get_visible_rect().size), str(DisplayServer.window_get_size())])
-	MatchState.player_is_commander = true
+	MatchState.set_commander_player(GameConfig.Team.GTI, true)
 	MatchState.set_phase(GameConfig.Phase.DEPLOY)
 	await get_tree().create_timer(0.2).timeout
 	_start_match()
@@ -133,7 +133,7 @@ func _capture_shot(idx: int) -> void:
 		get_tree().quit()
 
 func _auto_start() -> void:
-	MatchState.player_is_commander = true
+	MatchState.set_commander_player(GameConfig.Team.GTI, true)
 	MatchState.set_phase(GameConfig.Phase.DEPLOY)
 	await get_tree().create_timer(0.15).timeout
 	_start_match()
@@ -231,7 +231,7 @@ func _run_elect() -> void:
 	for c in cands:
 		if c["votes"] > winner["votes"]:
 			winner = c
-	MatchState.player_is_commander = winner.get("is_player", false)
+	MatchState.set_commander_player(GameConfig.Team.GTI, winner.get("is_player", false))
 	panel.queue_free()
 	EventBus.banner.emit("指挥官：%s（%d 票）" % [winner["name"], winner["votes"]],
 		GameConfig.TEAM_COLOR[0], 3.0)
@@ -241,49 +241,57 @@ func _run_elect() -> void:
 # ============================================================ 部署
 func _build_deploy_ui() -> void:
 	MatchState.set_phase(GameConfig.Phase.DEPLOY)
-	var panel := _make_panel("部署", "选择干员与部署点后进入战场", 560.0, 520.0)
+	var panel := _make_panel("部署", "选择干员与部署点后进入战场", 880.0, 640.0)
 	var role := Label.new()
-	role.text = "你已被票选为 GTI 指挥官 · 按 M 打开战术地图下达指令" if MatchState.player_is_commander \
-		else "你是 GTI 小队队员 · 按指挥官的战术标记行动"
+	role.text = "你已被票选为 GTI 指挥官 · 按 5/6 放技能、7/8 呼叫重火力、B 架设工事" 		if MatchState.player_is_commander 		else "你是 GTI 小队队员 · 按指挥官的战术标记行动"
 	role.position = Vector2(30, 96)
 	role.add_theme_font_size_override("font_size", 14)
-	role.add_theme_color_override("font_color", Color("#8fc4ff"))
+	role.add_theme_color_override("font_color", Palette.UI_GOLD_LIGHT)
 	panel.add_child(role)
 
+	# 九名干员按职业分三列排开。文档的推荐阵容是 8 突击 / 6 支援 / 3 工程 / 3 侦察，
+	# 所以同一兵种下必须真的有得选，"职业搭配"才不是一句空话
 	var grid := GridContainer.new()
-	grid.columns = 2
+	grid.columns = 3
 	grid.position = Vector2(30, 130)
-	grid.size = Vector2(500, 220)
-	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 10)
+	grid.size = Vector2(820, 420)
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
 	panel.add_child(grid)
 	var buttons: Array = []
 	for cls in [GameConfig.OpClass.ASSAULT, GameConfig.OpClass.SUPPORT,
 			GameConfig.OpClass.ENGINEER, GameConfig.OpClass.RECON]:
-		var op: Dictionary = GameConfig.OPERATORS[cls]
-		var b := Button.new()
-		b.custom_minimum_size = Vector2(245, 100)
-		b.text = "%s  ·  %s\n武器 %s\n大招 %s\nHP %d  机动 %d%%" % [
-			op["name"], op["role"], GameConfig.WEAPONS[op["weapon"]]["name"],
-			op["skill"], int(op["hp"]), int(op["speed"] * 100.0)]
-		b.pressed.connect(func():
-			picked_class = cls
-			for x in buttons:
-				x.modulate = Color(1, 1, 1))
-		buttons.append(b)
-		grid.add_child(b)
+		for id in GameConfig.op_ids_for_class(cls):
+			var op: Dictionary = GameConfig.op(id)
+			var b := Button.new()
+			b.custom_minimum_size = Vector2(268, 128)
+			b.text = "%s · %s
+武器 %s
+技能 %s
+HP %d  机动 %d%%" % [
+				op["name"], GameConfig.CLASS_NAME_CN[cls], GameConfig.WEAPONS[op["weapon"]]["name"],
+				op["skill"], int(op["hp"]), int(op["speed"] * 100.0)]
+			b.tooltip_text = op["desc"]
+			var oid: String = id
+			b.pressed.connect(func():
+				picked_op = oid
+				for x in buttons:
+					x.modulate = Color(1, 1, 1)
+				b.modulate = Color(1.25, 1.12, 0.72))
+			buttons.append(b)
+			grid.add_child(b)
+	buttons[0].modulate = Color(1.25, 1.12, 0.72)
 
 	var spawn_label := Label.new()
 	spawn_label.text = "部署点"
-	spawn_label.position = Vector2(30, 366)
+	spawn_label.position = Vector2(30, 486)
 	spawn_label.add_theme_font_size_override("font_size", 14)
 	panel.add_child(spawn_label)
 	var spawn_box := HBoxContainer.new()
-	spawn_box.position = Vector2(30, 392)
+	spawn_box.position = Vector2(30, 512)
 	spawn_box.add_theme_constant_override("separation", 10)
 	panel.add_child(spawn_box)
 	var opts := ["GTI 前沿基地", "前线集结点"]
-	var spawn_btns: Array = []
 	for i in opts.size():
 		var sb := Button.new()
 		sb.text = opts[i]
@@ -291,12 +299,11 @@ func _build_deploy_ui() -> void:
 		var idx := i
 		sb.pressed.connect(func(): picked_spawn = idx)
 		spawn_box.add_child(sb)
-		spawn_btns.append(sb)
 
 	var go := Button.new()
 	go.text = "进 入 战 场"
-	go.custom_minimum_size = Vector2(500, 54)
-	go.position = Vector2(30, 450)
+	go.custom_minimum_size = Vector2(820, 54)
+	go.position = Vector2(30, 566)
 	go.pressed.connect(func():
 		panel.queue_free()
 		_start_match())
@@ -310,7 +317,7 @@ func _start_match() -> void:
 	else:
 		var seg: int = clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)
 		pos = Vector2(GameConfig.SEGMENTS[seg]["x"] - 330.0, GameConfig.BASE_POS[GameConfig.Team.GTI].y)
-	var p: Soldier = battle.spawn_player(picked_class, pos)
+	var p: Soldier = battle.spawn_player(picked_op, pos)
 	player_ctrl.attach(p, world.camera)
 	# 美术走查用的镜头推近，对所有启动模式都生效（--auto 也能放大看单位）
 	player_ctrl.zoom_override = _demo_zoom
@@ -325,7 +332,8 @@ func _start_match() -> void:
 	for v in TeamManager.vehicles:
 		if is_instance_valid(v):
 			vk[v.display_name()] = int(vk.get(v.display_name(), 0)) + 1
-	print("[Main] 战斗开始 · 玩家兵种 %d · 出生 %s · 载具 %s" % [picked_class, pos, str(vk)])
+	print("[Main] 战斗开始 · 干员 %s · 出生 %s · 载具 %s" % [
+		GameConfig.op(picked_op)["name"], pos, str(vk)])
 
 # ============================================================ 结算
 ## 结算详情页：个人战绩 + 双方对比。
@@ -366,7 +374,7 @@ func _on_match_ended(win_team: int, title: String, subtitle: String) -> void:
 	var havoc_kills := _team_total_kills(GameConfig.Team.HAVOC)
 	var elapsed := int(GameConfig.MATCH_TIME - MatchState.time_left)
 	var compare := [
-		["票数", "%d  :  %d" % [MatchState.tickets[0], MatchState.tickets[1]], Color(0.84, 0.9, 0.94)],
+		["兵力", "%s  :  %s" % [MatchState.tickets_text(0), MatchState.tickets_text(1)], Color(0.84, 0.9, 0.94)],
 		["据点控制", "%d / %d" % [MatchState.owned_count(GameConfig.Team.GTI), GameConfig.CAPTURES.size()], Color("#8fc4ff")],
 		["区域推进", MatchState.current_segment_name(), Color("#ffd24a")],
 		["总击杀", "%d  :  %d" % [gti_kills, havoc_kills], Color(0.84, 0.9, 0.94)],
@@ -378,6 +386,25 @@ func _on_match_ended(win_team: int, title: String, subtitle: String) -> void:
 	for r in compare:
 		_add_row(panel, 528.0, ry, r[0], r[1], r[2])
 		ry += 34.0
+
+	# ---- 四维能力标签 ----
+	# 官方按对局表现结算「指挥 / 载具 / 步战 / 救援」四个维度并给金/银/铜。
+	# 这里用同一套口径：每个维度只有一个可累加的可观测量，不做复合加权 ——
+	# 复合加权看着精细，实际上玩家永远不知道自己为什么只拿了铜
+	_add_section(panel, "能力标签", 520.0, 402.0)
+	var pv: Soldier = p
+	var tags := [
+		["指挥能力", GameConfig.Team.GTI, _tag(float(CommandOps.marks_done[GameConfig.Team.GTI]) * 300.0
+			+ CommandOps.points[GameConfig.Team.GTI] * 0.1, 600.0, 300.0)],
+		["载具能力", 0, _tag(pv.vehicle_damage if pv != null else 0.0, 2500.0, 1000.0)],
+		["步战能力", 1, _tag((pv.infantry_damage if pv != null else 0.0) * 0.4, 1200.0, 500.0)],
+		["救援能力", 2, _tag(float(pv.revives if pv != null else 0) * 400.0, 800.0, 400.0)],
+	]
+	var tx := 528.0
+	for t in tags:
+		_add_row(panel, tx, ry, t[0], t[2], _tag_color(t[2]))
+		tx += 152.0
+	ry += 34.0
 
 	# ---- 结论 ----
 	var verdict := Label.new()
@@ -402,6 +429,20 @@ func _on_match_ended(win_team: int, title: String, subtitle: String) -> void:
 		panel.queue_free()
 		_restart())
 	panel.add_child(again)
+
+## 单维度评级。金 / 银 / 铜 三档，取不到银线就是铜
+func _tag(value: float, gold: float, silver: float) -> String:
+	if value >= gold:
+		return "金"
+	if value >= silver:
+		return "银"
+	return "铜"
+
+func _tag_color(tag: String) -> Color:
+	match tag:
+		"金": return Color("#ffc42e")
+		"银": return Color("#cfd8e0")
+	return Color("#c98a4b")
 
 func _team_total_kills(team: int) -> int:
 	var n := 0

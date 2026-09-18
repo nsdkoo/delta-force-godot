@@ -39,6 +39,18 @@ func alive_members() -> Array:
 func size_alive() -> int:
 	return alive_members().size()
 
+## 当前实际带队的人：标记的队长活着就是他，否则顺位交给第一个活着的成员。
+## 小队长的"阵营语音 + 工事建造权 + 附近重部署减冷却"都跟着这个人走，
+## 而不是跟着一个已经阵亡的 ID —— 队长死了全队就失去建造权，这在 20v20
+## 里会很别扭
+func active_leader() -> Soldier:
+	if is_instance_valid(leader) and leader.alive:
+		return leader
+	for m in members:
+		if is_instance_valid(m) and m.alive:
+			return m
+	return null
+
 func average_position() -> Vector2:
 	var alive := alive_members()
 	if alive.is_empty():

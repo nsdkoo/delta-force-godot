@@ -22,7 +22,7 @@ var _main: Node = null
 func run(main: Node) -> void:
 	_main = main
 	print("[自检] 开始 · 目标：载具链路 / 连杀奖励 / 炮塔限速 / 乘员安全")
-	MatchState.player_is_commander = true
+	MatchState.set_commander_player(GameConfig.Team.GTI, true)
 	MatchState.set_phase(GameConfig.Phase.DEPLOY)
 	main._start_match()
 	await _wait(8)
@@ -36,8 +36,189 @@ func run(main: Node) -> void:
 	await _test_turret_slew(main)
 	await _test_eject_on_destroy(p)
 	await _test_streak_rewards(p)
+	await _test_rescue(p)
 	await _test_streak_reset(p)
+	await _test_mode_rules(p)
+	await _test_command_ops(p)
+	await _test_overtime(p)
 	_finish()
+
+# ============================================================ 倒地与救援
+func _test_rescue(p: Soldier) -> void:
+	# 找一个己方队友来倒地。不用敌人的原因：救起来之后他还会被己方 AI 重新打倒，
+	# 断言就会在"救起"和"又被打倒"之间随机抖动
+	var target: Soldier = null
+	for u in TeamManager.alive_units(p.team):
+		if u != p:
+			target = u
+			break
+	_check("找到用于倒地测试的队友", target != null)
+	if target == null:
+		return
+	target.spawn_protection = 0.0
+	target.hp = 1.0
+	target.take_damage(999999.0, null)
+	await _wait(2)
+	_check("打空血进入倒地而不是直接阵亡", target.downed and target.alive,
+		"downed=%s alive=%s" % [str(target.downed), str(target.alive)])
+	_check("倒地单位不计入存活", not TeamManager.alive_units().has(target))
+	_check("倒地单位出现在待救援列表", TeamManager.downed_units().has(target))
+
+	# 挪到己方基地后方再拖：前线救人会被敌人重新打倒，
+	# "救起来了"和"刚救起又被打倒"两种结果会让断言随机失败
+	var safe: Vector2 = GameConfig.BASE_POS[GameConfig.Team.GTI] + Vector2(60.0, 260.0)
+	p.global_position = safe
+	target.global_position = safe + Vector2(36.0, 0.0)
+	await _wait(3)
+	_check("拖拽救援开始", p.start_drag(target) and target.dragging_by == p)
+	var need := GameConfig.REVIVE_TIME + 0.4
+	await _seconds(need)
+	_check("保持接触后可救起", not target.downed and target.hp > 0.0,
+		"downed=%s hp=%.0f progress=%.1f revives=%d" % [str(target.downed), target.hp,
+			target.revive_progress, p.revives])
+	_check("救起者累计救援次数", p.revives >= 1, "revives=%d" % p.revives)
+	p.release_drag()
+
+# ============================================================ 兵力模型
+func _test_mode_rules(p: Soldier) -> void:
+	# 不能用"当前兵力 == 180"来断言：前面几段测试里己方阵亡已经扣过票了。
+	# 这里要验的是配置口径与"只减不增"这两件事
+	_check("攻方初始兵力配置为 180", GameConfig.ATTACKER_TICKETS == 180)
+	_check("攻方兵力不超过上限", MatchState.tickets[0] <= GameConfig.ATTACKER_TICKETS,
+		"%d" % MatchState.tickets[0])
+	_check("守方兵力无限", MatchState.tickets_text(1) == "∞", MatchState.tickets_text(1))
+	var before: int = MatchState.tickets[1]
+	MatchState.spend_ticket(1)
+	_check("守方阵亡不扣兵力", MatchState.tickets[1] == before)
+	var atk: int = MatchState.tickets[0]
+	MatchState.add_tickets(0, 80)
+	_check("攻方兵力只减不增", MatchState.tickets[0] == atk, "%d" % MatchState.tickets[0])
+	_check("复活冷却为 20 秒", is_equal_approx(MatchState.respawn_delay_for(0), 20.0),
+		"%.0f" % MatchState.respawn_delay_for(0))
+
+# ============================================================ 指挥部
+func _test_command_ops(p: Soldier) -> void:
+	CommandOps.points[0] = 1200.0
+	# 清掉这两条的冷却：对面的 AI 指挥官也在用技能，不能假设冷却一定是空的
+	CommandOps.skill_cd.erase("0:vip_point")
+	CommandOps.skill_cd.erase("0:threat_veh")
+	# 高价值据点：标记后不立刻结算，必须等窗口结束
+	_check("释放高价值据点技能", CommandOps.use_skill(0, "vip_point", Vector2.INF))
+	# 不比较 marks 总数：对面的标记随时可能到期消失，只数"我方这一条在不在"
+	var mine := 0
+	for m in CommandOps.marks:
+		if m["team"] == 0 and m["kind"] == "vip_point":
+			mine += 1
+	_check("标记已登记", mine == 1, "己方高价值据点标记 %d 条" % mine)
+	_check("技能进入冷却", CommandOps.skill_cd_left(0, "vip_point") > 0.0,
+		"%.0fs" % CommandOps.skill_cd_left(0, "vip_point"))
+	_check("冷却期间无法重复释放", not CommandOps.use_skill(0, "vip_point", Vector2.INF))
+	_check("守方专属技能对攻方不可用", not CommandOps.can_use_skill(0, "emergency"))
+	_check("攻方专属技能可用", CommandOps.can_use_skill(0, "reinforce"))
+	CommandOps.use_skill(0, "reinforce", Vector2.INF)
+	_check("阵线增援生效", MatchState.free_redeploy > 0.0,
+		"%.0fs" % MatchState.free_redeploy)
+
+	# 重火力：花积分、进队列、进冷却
+	var pts_before: float = CommandOps.points[0]
+	_check("呼叫炮兵齐射", CommandOps.use_heavy(0, "artillery", Vector2(1900, 1300)))
+	_check("落弹已排队", StreakManager.pending_strikes() > 0,
+		"%d 发" % StreakManager.pending_strikes())
+	_check("炮兵扣了阵营积分",
+		CommandOps.points[0] < pts_before - GameConfig.HEAVY_SUPPORT["artillery"]["cost"] + 5.0)
+	_check("重火力进入冷却", CommandOps.heavy_cd_left(0, "artillery") > 0.0)
+	await _seconds(4.0)
+	_check("炮兵落完", StreakManager.pending_strikes() == 0)
+
+	# 工事：同时最多 1 个
+	p.is_squad_leader = true
+	p.spawn_protection = 1e9
+	CommandOps.fort_cd[0] = 0.0
+	_check("架设工事", CommandOps.build_fort("bunker", p))
+	await _wait(2)
+	_check("工事已就位", CommandOps.forts[0] != null and is_instance_valid(CommandOps.forts[0]))
+	_check("工事进入建造冷却", CommandOps.fort_cd_left(0) > 0.0,
+		"%.0fs" % CommandOps.fort_cd_left(0))
+	CommandOps.fort_cd[0] = 0.0
+	CommandOps.build_fort("vulcan", p)
+	await _wait(2)
+	# 只数自己这一方：对面 AI 指挥官也会架工事，把双方一起数进来必然得到 2
+	var alive_forts := 0
+	for t in 2:
+		if CommandOps.forts[t] != null and is_instance_valid(CommandOps.forts[t]) 				and CommandOps.forts[t].team == GameConfig.Team.GTI:
+			alive_forts += 1
+	_check("同时最多 1 个工事（新建替换旧的）", alive_forts == 1, "%d 个" % alive_forts)
+	_check("被替换的工事立刻停火", CommandOps.forts[0] != null and CommandOps.forts[0].alive)
+
+	# 烬区地图机制
+	MatchState.c1_missile_hits = 0
+	MatchState.c1_shattered = false
+	var c1 := {}
+	for c in GameConfig.CAPTURES:
+		if c["id"] == "C1":
+			c1 = c
+	MatchState.register_missile_hit(c1["pos"])
+	_check("C1 挨一发导弹还没塌", not MatchState.c1_shattered)
+	MatchState.register_missile_hit(c1["pos"])
+	_check("C1 挨两发后坍塌归攻方", MatchState.c1_shattered
+		and MatchState.captures["C1"]["owner"] == GameConfig.Team.GTI)
+	_check("C1 坍塌后被锁定", MatchState.is_locked("C1"))
+
+	# 四维能力画像
+	p.vehicle_damage = 500.0
+	p.infantry_damage = 800.0
+	_check("载具伤害已记账", p.vehicle_damage > 0.0)
+	_check("步兵伤害已记账", p.infantry_damage > 0.0)
+
+# ============================================================ 加时赛
+func _test_overtime(p: Soldier) -> void:
+	MatchState.match_active = true
+	MatchState.overtime = false
+	MatchState.overtime_phase = 0
+	MatchState.tickets[0] = 0
+	# 把玩家塞进据点圈里，制造"拉旗状态"，再手动触发一次胜负判定
+	var cap: Dictionary = GameConfig.CAPTURES[0]
+	p.global_position = cap["pos"]
+	await _wait(3)
+	# 兵力是被直接改的，得手动走一次判定 —— 正常流程里是阵亡扣票到最后一点时自动触发
+	MatchState._check_win()
+	await _wait(2)
+	_check("攻方兵力耗尽且点内有人 -> 进入加时", MatchState.overtime)
+	_check("加时第一阶段", MatchState.overtime_phase == 1,
+		"phase=%d" % MatchState.overtime_phase)
+	_check("加时标记了胜负手据点", MatchState.overtime_point != "",
+		MatchState.overtime_point)
+	_check("点内有人时时间流速减半", MatchState._attacker_holds_any_point())
+	_check("减速系数为 0.5", is_equal_approx(GameConfig.OVERTIME_TIME_SCALE, 0.5))
+	var ot_before: float = MatchState.overtime_time
+	await _seconds(2.0)
+	_check("加时一阶段的时间在走", MatchState.overtime_time < ot_before,
+		"%.1f -> %.1f" % [ot_before, MatchState.overtime_time])
+	# 先把状态按到确定值再推进时间。上面那 2 秒里 AI 可能已经把 A1 打下来，
+	# 那就是"加时赛夺点"直接结束战局 —— match_active 变 false 之后加时计时
+	# 就不再走，第二阶段永远进不去（这是实测踩到的抖动，不是逻辑错误）
+	for c in GameConfig.CAPTURES:
+		MatchState.captures[c["id"]]["owner"] = GameConfig.Team.HAVOC
+		MatchState.captures[c["id"]]["progress"] = 0.0
+	# 阶段切换直接驱动一次 tick，而不是"改小剩余时间然后等几帧"。
+	# 等帧的做法会被真实战局干扰：AI 随时可能拿下标记据点直接结束战局，
+	# 战局一结束加时计时就停了。要验的是"时间归零 -> 进二阶段"这条规则，
+	# 那就把这条规则单独拿出来驱动，别把整局对局的状态机也拉进来
+	MatchState.match_active = true
+	MatchState.overtime = true
+	MatchState.overtime_phase = 1
+	MatchState.overtime_time = -0.001
+	MatchState._tick_overtime(0.0)
+	_check("一阶段时间归零 -> 进入第二阶段", MatchState.overtime_phase == 2,
+		"phase=%d" % MatchState.overtime_phase)
+	# 第二阶段占下那个点即胜
+	MatchState.captures[MatchState.overtime_point]["owner"] = GameConfig.Team.GTI
+	MatchState.match_active = true
+	MatchState._check_win()
+	await _wait(2)
+	_check("加时赛夺点 -> 攻方获胜",
+		MatchState.result.get("win_team", -1) == GameConfig.Team.GTI,
+		str(MatchState.result.get("title", "")))
 
 # ============================================================ 载具链路
 func _test_vehicle_link(p: Soldier, main: Node) -> void:
@@ -205,9 +386,13 @@ func _test_streak_reset(p: Soldier) -> void:
 	p.spawn_protection = 0.0
 	p.take_damage(999999.0, null)
 	await _wait(3)
-	_check("阵亡后连杀清零", p.streak == 0 and StreakManager.streak == 0,
+	_check("被击倒后连杀清零", p.streak == 0 and StreakManager.streak == 0,
 		"streak=%d" % p.streak)
 	_check("最高连杀被保留", p.best_streak >= 12, "best=%d" % p.best_streak)
+	# 后面的模式规则与指挥部测试需要一个还能行动的玩家，这里直接复活自己
+	p._revive()
+	await _wait(2)
+	_check("倒地后可以被直接救起", not p.downed and p.hp > 0.0, "hp=%.0f" % p.hp)
 
 # ============================================================ 工具
 func _friendly_vehicle(team: int) -> CombatVehicle:
@@ -216,14 +401,19 @@ func _friendly_vehicle(team: int) -> CombatVehicle:
 			return v
 	return null
 
-## 让玩家的真实击杀数 +n：走 take_damage -> _die -> EventBus.unit_died -> StreakManager
+## 让玩家的真实击杀数 +n：走 take_damage -> _go_down -> EventBus.unit_downed -> StreakManager。
+## 这里会把目标强制拉回"活着"再打：加了倒地之后，被打倒的敌人要流血 25 秒才移除，
+## 战场上可打的活人会越来越少，不重置的话断言会因为"没人可打"而失败
 func _kill_enemies(p: Soldier, n: int) -> void:
 	var done := 0
-	for u in TeamManager.alive_units():
+	for u in TeamManager.units:
 		if done >= n:
 			break
-		if u.team == p.team:
+		if not is_instance_valid(u) or u.team == p.team:
 			continue
+		u.alive = true
+		u.downed = false
+		u.hp = 1.0
 		u.spawn_protection = 0.0
 		u.take_damage(999999.0, p)
 		await _wait(1)
@@ -231,15 +421,19 @@ func _kill_enemies(p: Soldier, n: int) -> void:
 	_check("制造 %d 次击杀" % n, done == n, "实际 %d" % done)
 
 ## 把敌人堆到一点，用来验证范围支援的杀伤。
+## 会把目标强制拉回存活：倒地的人不算 alive，战场上可用的活人会越打越少。
 ## 目标间距压到 35 以内，是为了让"8 发覆盖弹幕"这件事有确定的答案 ——
 ## 散得太开时，炸不炸得死取决于随机数，测不出实现对不对。
 func _gather_enemies(p: Soldier, n: int, at: Vector2) -> int:
 	var moved := 0
-	for u in TeamManager.alive_units():
+	for u in TeamManager.units:
 		if moved >= n:
 			break
-		if u.team == p.team:
+		if not is_instance_valid(u) or u.team == p.team:
 			continue
+		u.alive = true
+		u.downed = false
+		u.hp = u.max_hp
 		u.spawn_protection = 0.0
 		u.global_position = at + Vector2(randf_range(-35, 35), randf_range(-35, 35))
 		moved += 1

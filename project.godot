@@ -22,6 +22,7 @@ MatchState="*res://autoload/match_state.gd"
 TeamManager="*res://autoload/team_manager.gd"
 AudioManager="*res://autoload/audio_manager.gd"
 StreakManager="*res://autoload/streak_manager.gd"
+CommandOps="*res://autoload/command_ops.gd"
 
 
 

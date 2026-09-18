@@ -25,6 +25,7 @@ const MAX_EFFECTS := 320
 ##   life 存活秒数  t   已存活时间  grow 每秒额外膨胀比例
 ##   color 调制色（可超过 1.0 触发辉光）  spin 每秒自转弧度
 var effects: Array = []
+## 描边材质不挂在这层：爆炸素材本身是平涂无边的，配上场景里的描边反而更脏
 
 func _ready() -> void:
 	## 退出光照链路：特效需要保持高亮，被环境天光压暗反而会丢掉辉光。
@@ -44,10 +45,13 @@ func _process(delta: float) -> void:
 
 func _draw() -> void:
 	for e in effects:
+		var k: float = clampf(float(e["t"]) / maxf(float(e["life"]), 0.001), 0.0, 1.0)
 		var tex: Texture2D = e["tex"]
+		var frames: Array = e.get("frames", [])
+		if not frames.is_empty():
+			tex = frames[clampi(int(floor(k * float(frames.size()))), 0, frames.size() - 1)]
 		if tex == null:
 			continue
-		var k: float = clampf(float(e["t"]) / maxf(float(e["life"]), 0.001), 0.0, 1.0)
 		## 生命末期线性淡出；膨胀让火焰与烟有"扩散"感，而不是原地闪烁
 		var s: float = float(e["scale"]) * (1.0 + float(e["grow"]) * k)
 		var col: Color = e["color"]
@@ -60,42 +64,63 @@ func _draw() -> void:
 # ============================================================ 记录
 func _add(tex_name: String, pos: Vector2, rot: float, scale: float,
 		life: float, color: Color, grow: float = 0.0, spin: float = 0.0) -> void:
-	var tex := AssetDB.fx(tex_name)
-	if tex == null:
+	_add_tex(AssetDB.fx(tex_name), pos, rot, scale, life, color, grow, spin)
+
+## frames 非空时按进度逐帧播放（爆炸素材是 5 张静帧的序列）
+func _add_tex(tex: Texture2D, pos: Vector2, rot: float, scale: float,
+		life: float, color: Color, grow: float = 0.0, spin: float = 0.0,
+		frames: Array = []) -> void:
+	if tex == null and frames.is_empty():
 		return
 	if effects.size() >= MAX_EFFECTS:
 		effects.pop_front()
 	effects.append({
 		"tex": tex, "pos": pos, "rot": rot, "scale": scale,
 		"life": life, "t": 0.0, "color": color, "grow": grow, "spin": spin,
+		"frames": frames,
 	})
+
+## 逐帧动画：一次爆炸是"火球 5 帧 + 烟 5 帧"两段序列叠起来的
+func _blast_frames(smoke: bool) -> Array:
+	var out: Array = []
+	for i in 5:
+		var t := AssetDB.kfx(("expsmoke_" if smoke else "exp_") + str(i + 1))
+		if t != null:
+			out.append(t)
+	return out
 
 # ============================================================ 事件入口
 ## kind: muzzle（炮口焰）/ boom（爆炸）/ smoke（烟柱）
 func _on_explosion(pos: Vector2, scale: float, kind: String) -> void:
 	match kind:
 		"muzzle":
-			## 极短的一帧亮斑。炮口焰比枪口焰大一号，用两个角度错开叠出十字星芒
-			_add("muzzle_2", pos, randf() * TAU, 0.55 * scale, 0.075,
+			## 枪口焰直接用素材包里的曳光贴片，比手搓的圆点更像火光
+			_add("shot_large", pos, randf() * TAU, 0.9 * scale, 0.09,
 				Color(2.6, 1.9, 0.9, 1.0))
-			_add("muzzle", pos, randf() * TAU, 0.75 * scale, 0.06,
-				Color(2.2, 1.3, 0.5, 0.9))
+			_add("shot_orange", pos, randf() * TAU, 1.1 * scale, 0.07,
+				Color(2.2, 1.4, 0.6, 0.95))
 		"smoke":
 			_add("smoke", pos, randf() * TAU, 0.7 * scale, 0.85,
 				Color(1.1, 1.05, 1.0, 0.5), 0.9, randf_range(-0.6, 0.6))
 		_:
-			## boom：火球 + 火星 + 烟柱三层。火球寿命最短、最亮，烟最长、最暗，
-			## 三者错开之后爆炸才有"炸开再散掉"的层次，否则只是一团光闪一下
-			_add("fire", pos, randf() * TAU, 0.85 * scale, 0.42,
-				Color(2.4, 1.05, 0.32, 1.0), 0.55, randf_range(-1.2, 1.2))
-			_add("flame", pos, randf() * TAU, 0.6 * scale, 0.30,
-				Color(2.0, 1.5, 0.6, 0.95), 0.8)
+			## boom：火球序列 + 烟序列 + 一层焦痕。
+			## 素材的 5 帧序列本身就是"炸开→扩散→消散"，比手绘的
+			## 多层叠加强得多，所以这里不再自己搓火球
+			var fire := _blast_frames(false)
+			if not fire.is_empty():
+				_add_tex(fire[0], pos, randf() * TAU, 1.15 * scale, 0.46,
+					Color(2.0, 1.5, 0.9, 1.0), 0.5, 0.0, fire)
+			else:
+				_add("fire", pos, randf() * TAU, 0.85 * scale, 0.42,
+					Color(2.4, 1.05, 0.32, 1.0), 0.55)
 			_add("spark", pos, randf() * TAU, 1.5 * scale, 0.22,
 				Color(2.8, 2.2, 1.2, 1.0), 1.1)
-			_add("smoke", pos + Vector2(0, -6.0), randf() * TAU, 0.9 * scale, 1.35,
-				Color(0.9, 0.86, 0.8, 0.55), 0.85, randf_range(-0.5, 0.5))
+			var smk := _blast_frames(true)
+			if not smk.is_empty():
+				_add_tex(smk[0], pos + Vector2(0, -8.0), randf() * TAU, 1.3 * scale, 1.5,
+					Color(1.0, 0.97, 0.92, 0.62), 0.7, 0.0, smk)
 			_add("scorch", pos, randf() * TAU, 0.7 * scale, 1.1,
-				Color(0.32, 0.26, 0.2, 0.8), 0.35)
+				Color(0.32, 0.26, 0.2, 0.7), 0.35)
 
 ## kind: flesh（血肉）/ metal（金属）/ sand（沙土）
 func _on_impact(pos: Vector2, normal: Vector2, kind: String) -> void:
@@ -104,9 +129,9 @@ func _on_impact(pos: Vector2, normal: Vector2, kind: String) -> void:
 	var rot := normal.angle()
 	match kind:
 		"flesh":
-			_add("spark", p, rot, 0.30, 0.13, Color(2.2, 0.5, 0.42, 1.0), 0.7)
+			_add("shot_red", p, rot, 0.45, 0.14, Color(2.2, 0.5, 0.42, 1.0), 0.7)
 		"metal":
-			_add("spark", p, rot, 0.36, 0.15, Color(2.8, 2.3, 1.3, 1.0), 0.6)
+			_add("shot_thin", p, rot, 0.5, 0.16, Color(2.8, 2.3, 1.3, 1.0), 0.6)
 			_add("smoke", p, randf() * TAU, 0.18, 0.30, Color(1.0, 0.95, 0.85, 0.4), 1.0)
 		_:
 			## sand：沙土弹着以扬尘为主，没有亮部

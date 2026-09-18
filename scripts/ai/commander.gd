@@ -40,6 +40,57 @@ func _decide() -> void:
 		_decide_attack(now)
 	else:
 		_decide_defend(now)
+	# 指挥部的活：放技能、买重火力、架工事。
+	# 玩家接管之后这三件事全部交给玩家，AI 不抢 —— 否则玩家刚买的重火力
+	# 会被 AI 在同一秒花掉，指挥权就名存实亡了
+	if not is_player and not MatchState.commander_is_player(team):
+		_decide_ops(now)
+		_try_build_fort(now)
+
+## 指挥部决策：优先标记类技能（能换分），积分富余再买重火力
+func _decide_ops(_now: float) -> void:
+	var ids := CommandOps.skill_defs(team)
+	for id in ["vip_point", "threat_veh", "reinforce", "emergency"]:
+		if ids.has(id) and CommandOps.can_use_skill(team, id):
+			CommandOps.use_skill(team, id, Vector2.INF)
+			return
+	if CommandOps.points[team] < 380.0:
+		return
+	var hot := _hottest_point()
+	if hot == Vector2.INF:
+		return
+	if CommandOps.can_use_heavy(team, "missile"):
+		CommandOps.use_heavy(team, "missile", hot)
+	elif CommandOps.can_use_heavy(team, "artillery"):
+		CommandOps.use_heavy(team, "artillery", hot)
+
+## 当前最需要火力覆盖的位置：攻方打"正在争夺的点"，守方打"被压得最狠的点"
+func _hottest_point() -> Vector2:
+	var best := Vector2.INF
+	var best_n := 0
+	for c in GameConfig.CAPTURES:
+		var enemy := GameConfig.Team.HAVOC if team == GameConfig.Team.GTI else GameConfig.Team.GTI
+		var n := TeamManager.count_in_radius(c["pos"], c["radius"] + 40.0, enemy)
+		if n > best_n:
+			best_n = n
+			best = c["pos"]
+	return best if best_n >= 3 else Vector2.INF
+
+## 小队长架工事：守方架在被打的据点圈内，攻方架在自己正在推进的方向上。
+## 冷却 80/130 秒由 CommandOps 统一管，这里只负责在能建的时候挑个好位置
+func _try_build_fort(_now: float) -> void:
+	if not CommandOps.can_build_fort(team):
+		return
+	var squads := TeamManager.squads_of_team(team)
+	if squads.is_empty():
+		return
+	var sq: Squad = squads[randi() % squads.size()]
+	var ld: Soldier = sq.active_leader()
+	if ld == null or not ld.alive:
+		return
+	# 工事种类按阵营分工：攻方要压制，守方要反装甲与防空
+	var kinds: Array = ["bunker", "vulcan"] if team == GameConfig.Team.GTI else ["coastal", "aa"]
+	CommandOps.build_fort(kinds[randi() % kinds.size()], ld)
 
 func _decide_attack(now: float) -> void:
 	var seg := clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)

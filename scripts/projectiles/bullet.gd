@@ -67,7 +67,19 @@ func _on_hit(hit: Dictionary) -> void:
 			AudioManager.volume_for(pos, _listener()))
 		EventBus.impact.emit(pos, hit.get("normal", Vector2.UP), "flesh")
 	elif col is Node2D and col.has_method("take_damage"):
-		col.take_damage(damage * 0.15, shooter)
+		# 默认 15%：载具是装甲目标，枪械只能磨。工事这类"该被打掉的东西"
+		# 自己声明 bullet_damage_scale = 1.0 拿满伤害
+		var scale := 0.15
+		if "bullet_damage_scale" in col:
+			scale = col.bullet_damage_scale
+		# 空中目标单独一套：它是薄皮但难打中，普通枪械效率很低，
+		# 狙击枪是唯一能"空摘飞行员"的枪械（对应文档里的空摘成就）
+		if col is CombatVehicle and col.is_air:
+			scale = 1.8 if weapon_id == "sniper" else 0.7
+		# 工程兵的反载具加成：打载具时伤害上浮
+		if col is CombatVehicle and shooter != null and is_instance_valid(shooter) 				and shooter.has_method("has_at_boost") and shooter.has_at_boost():
+			scale *= 1.6
+		col.take_damage(damage * scale, shooter)
 		EventBus.impact.emit(pos, hit.get("normal", Vector2.UP), "metal")
 		AudioManager.play_2d("hit_metal", pos, AudioManager.volume_for(pos, _listener()))
 	else:

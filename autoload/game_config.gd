@@ -10,7 +10,7 @@ enum Team { GTI = 0, HAVOC = 1 }
 enum OpClass { ASSAULT, SUPPORT, ENGINEER, RECON }
 enum OrderKind { ATTACK, DEFEND, ADVANCE, WARN }
 enum Phase { BOOT, ELECT, DEPLOY, FIGHT, RESULT }
-enum VehKind { TANK, APC }
+enum VehKind { TANK, APC, AA, HELI, CAR }
 
 # 物理层位（1 << (layer-1)）
 enum Layer {
@@ -30,14 +30,37 @@ const TEAM_COLOR := {Team.GTI: Color("#4aa8ff"), Team.HAVOC: Color("#ff5b4a")}
 const TEAM_COLOR_DIM := {Team.GTI: Color("#2f6ea8"), Team.HAVOC: Color("#a8342a")}
 
 const WORLD_SIZE := Vector2(3800.0, 2600.0)
-const TICKET_MAX := [320, 260]
+## 进攻方兵力。守方兵力无限 —— 这是胜者为王和普通攻防最大的结构差异：
+## 守方的"血量"是时间，攻方的"血量"是兵力，双方不在同一个资源池里博弈。
+const ATTACKER_TICKETS := 180
 const MATCH_TIME := 900.0
 const TEAM_SIZE := 20
 const SQUAD_SIZE := 4
-const RESPAWN_DELAY := 6.0
+## 复活冷却。远长于普通攻防（6 秒），死亡代价高，这是"控点 > 杀人"这个
+## 核心原则能成立的前提：死一次就是二十秒的空窗，光靠击杀换不来据点
+const RESPAWN_DELAY := 20.0
+## 在小队长附近重部署的冷却减免（秒）
+const LEADER_RESPAWN_BONUS := 5.0
 const CAP_TICKET_GAIN := 15
 const CAP_TICKET_LOSS := 10
 const SEGMENT_TICKET_BONUS := 80
+
+# ---------------------------------------------------------------- 加时赛
+## 攻方兵力耗尽但点内人数占优时触发。第一阶段只要点里还有攻方的人，
+## 时间流速减半；撑过第一阶段进入第二阶段，时间恒定，占下即为胜。
+const OVERTIME_PHASE1 := 90.0
+const OVERTIME_PHASE2 := 30.0
+const OVERTIME_TIME_SCALE := 0.5
+
+# ---------------------------------------------------------------- 倒地与救援
+## 打空血不是立刻阵亡，而是进入倒地状态：可以爬、可以被拖、可以救起来。
+## 这一条把"死亡"从一个瞬间事件变成一段可以博弈的时间：救不救、拖不拖、
+## 拖到哪，都是决策。倒地被拖时救援者会减速，所以拖人有真实的战术代价。
+const BLEED_OUT_TIME := 25.0
+const REVIVE_TIME := 4.0
+const REVIVE_RANGE := 78.0
+const REVIVE_HP_RATIO := 0.45
+const DRAG_SPEED_SCALE := 0.62
 
 # ---------------------------------------------------------------- 地图（烬区）
 const SEGMENTS := [
@@ -87,28 +110,103 @@ const WEAPONS := {
 }
 
 # ---------------------------------------------------------------- 干员
+## 每个干员是一个独立 id，而不是"一个兵种一个干员"。
+## 文档里的阵容推荐（8 突击 + 6 支援 + 3 工程 + 3 侦察）要求同一兵种下有多个
+## 可选干员，否则"职业搭配"根本无从谈起。
+##
+## passive 只实现了几条能直接改变手感的：exo（动力外骨骼）/ regen（脱战回血）/
+## at_boost（反载具加成）/ dog（军犬自动标记）。其余留给文案与后续扩展。
 const OPERATORS := {
-	OpClass.ASSAULT: {
-		"name": "红狼", "role": "突击兵", "weapon": "ar", "sprite": "soldier_rifle",
-		"skill": "动能手雷", "skill_cd": 14.0, "hp": 110.0, "speed": 1.06,
-		"color": Color("#ff6b57"), "desc": "动能手雷可弹墙投掷，爆炸范围大。巷战清点首选。",
+	# ---- 突击 ----
+	"redwolf": {
+		"name": "红狼", "role": "突击兵", "class": OpClass.ASSAULT,
+		"weapon": "ar", "sprite": "soldier_rifle",
+		"skill": "动力外骨骼", "skill_cd": 14.0, "hp": 110.0, "speed": 1.06,
+		"color": Color("#ff6b57"), "passive": "exo",
+		"desc": "外骨骼激活后提升移速与射速，击杀回血。突进收割首选。",
 	},
-	OpClass.SUPPORT: {
-		"name": "蜂医", "role": "支援兵", "weapon": "lmg", "sprite": "soldier_lmg",
+	"weilong": {
+		"name": "威龙", "role": "突击兵", "class": OpClass.ASSAULT,
+		"weapon": "ar", "sprite": "soldier_reload",
+		"skill": "C4 破障", "skill_cd": 16.0, "hp": 120.0, "speed": 1.0,
+		"color": Color("#ff9a3a"), "passive": "",
+		"desc": "C4 爆破掩体配虎蹲炮压制，攻坚破点的第一选择。",
+	},
+	# ---- 支援 ----
+	"bee": {
+		"name": "蜂医", "role": "支援兵", "class": OpClass.SUPPORT,
+		"weapon": "lmg", "sprite": "soldier_lmg",
 		"skill": "医疗包", "skill_cd": 16.0, "hp": 130.0, "speed": 0.94,
-		"color": Color("#57e08a"), "desc": "投放医疗包持续治疗范围内友军。机枪压制力最强，机动差。",
+		"color": Color("#57e08a"), "passive": "",
+		"desc": "治疗烟加激素枪，团队核心续航。机枪压制力最强、机动最差。",
 	},
-	OpClass.ENGINEER: {
-		"name": "乌鲁鲁", "role": "工程兵（反载具 T0）", "weapon": "smg", "sprite": "operator_blue",
+	"raincoat": {
+		"name": "风衣", "role": "支援兵", "class": OpClass.SUPPORT,
+		"weapon": "ar", "sprite": "operator_survivor",
+		"skill": "战地恢复", "skill_cd": 13.0, "hp": 125.0, "speed": 0.98,
+		"color": Color("#8fd9a8"), "passive": "regen",
+		"desc": "自带强力恢复，烟雾弹储量高，可携带弹药箱。新手最稳的支援。",
+	},
+	"traveler": {
+		"name": "旅人", "role": "支援兵", "class": OpClass.SUPPORT,
+		"weapon": "smg", "sprite": "operator_green",
+		"skill": "气雾针剂", "skill_cd": 15.0, "hp": 115.0, "speed": 1.02,
+		"color": Color("#b6e06a"), "passive": "dog",
+		"desc": "军犬协同：自动标记附近敌人。刺激性烟雾逼出敌人位置，气雾针剂友方治疗、敌方削弱。",
+	},
+	# ---- 工程 ----
+	"uluru": {
+		"name": "乌鲁鲁", "role": "工程兵（反载具 T0）", "class": OpClass.ENGINEER,
+		"weapon": "smg", "sprite": "operator_blue",
 		"skill": "巡飞弹", "skill_cd": 20.0, "hp": 110.0, "speed": 1.0,
-		"color": Color("#ffc24a"), "desc": "大招巡飞弹可侦查、追踪、补刀、防空。多人集火可秒杀满血主战坦克。",
+		"color": Color("#ffc24a"), "passive": "at_boost",
+		"desc": "巡飞弹可侦查、追踪、补刀、防空。声波震慑在防守与反载具场景压制力极强。",
 	},
-	OpClass.RECON: {
-		"name": "露娜", "role": "侦察兵", "weapon": "sniper", "sprite": "operator_agent",
+	# ---- 侦察 ----
+	"luna": {
+		"name": "露娜", "role": "侦察兵", "class": OpClass.RECON,
+		"weapon": "sniper", "sprite": "operator_agent",
 		"skill": "声波探测", "skill_cd": 18.0, "hp": 100.0, "speed": 1.02,
-		"color": Color("#8fc4ff"), "desc": "声波探测脉冲标记范围内敌人，全队共享视野。远端点名与反狙击。",
+		"color": Color("#8fc4ff"), "passive": "spot_long",
+		"desc": "探测剑大范围标记敌人，全队共享视野。远端点名与反狙击。",
+	},
+	"silverwing": {
+		"name": "银翼", "role": "侦察兵", "class": OpClass.RECON,
+		"weapon": "sniper", "sprite": "operator_blue",
+		"skill": "无人机侦察", "skill_cd": 18.0, "hp": 100.0, "speed": 1.04,
+		"color": Color("#a9d4ff"), "passive": "drone",
+		"desc": "无人机持续侦察，提前探明敌方载具与伏兵位置。",
+	},
+	"xiaowen": {
+		"name": "麦小文", "role": "侦察兵", "class": OpClass.RECON,
+		"weapon": "smg", "sprite": "operator_survivor",
+		"skill": "飞刀渗透", "skill_cd": 12.0, "hp": 95.0, "speed": 1.08,
+		"color": Color("#c9a9ff"), "passive": "",
+		"desc": "飞刀静默渗透，插重生信标缩短全队推进距离。",
 	},
 }
+
+## 兵种的默认干员（AI 编队与旧调用方用）
+const CLASS_DEFAULT := {
+	OpClass.ASSAULT: "redwolf",
+	OpClass.SUPPORT: "bee",
+	OpClass.ENGINEER: "uluru",
+	OpClass.RECON: "luna",
+}
+
+## 取干员数据。id 不存在时退回突击兵，任何情况下都返回有效字典
+static func op(id: String) -> Dictionary:
+	return OPERATORS.get(id, OPERATORS["redwolf"])
+
+static func op_id_for_class(cls: int) -> String:
+	return CLASS_DEFAULT.get(cls, "redwolf")
+
+static func op_ids_for_class(cls: int) -> Array:
+	var out: Array = []
+	for id in OPERATORS:
+		if int(OPERATORS[id]["class"]) == cls:
+			out.append(id)
+	return out
 
 const CLASS_NAME_CN := {
 	OpClass.ASSAULT: "突击兵", OpClass.SUPPORT: "支援兵",
@@ -116,20 +214,41 @@ const CLASS_NAME_CN := {
 }
 
 # ---------------------------------------------------------------- 载具
+## is_air：空中单位，无视建筑碰撞、也只能被防空火力高效击落
+## can_hit_air：具备对空能力（防空车 / 武直自身）
 const VEHICLES := {
 	VehKind.TANK: {
-		"name": "主战坦克", "hp": 3200.0, "speed": 92.0, "radius": 40.0,
+		"name": "主战坦克", "key": "tank", "hp": 3200.0, "speed": 92.0, "radius": 40.0,
 		"mg_damage": 12.0, "cannon_damage": 900.0, "cannon_infantry": 150.0,
-		"splash": 150.0, "reload": 6.5,
+		"splash": 150.0, "reload": 6.5, "is_air": false, "can_hit_air": false,
 	},
 	VehKind.APC: {
-		"name": "装甲车", "hp": 1600.0, "speed": 165.0, "radius": 32.0,
+		"name": "装甲车", "key": "apc", "hp": 1600.0, "speed": 165.0, "radius": 32.0,
 		"mg_damage": 11.0, "cannon_damage": 120.0, "cannon_infantry": 80.0,
-		"splash": 110.0, "reload": 3.2,
+		"splash": 110.0, "reload": 3.2, "is_air": false, "can_hit_air": false,
+	},
+	VehKind.AA: {
+		"name": "防空车", "key": "apc", "hp": 1400.0, "speed": 150.0, "radius": 30.0,
+		"mg_damage": 10.0, "cannon_damage": 90.0, "cannon_infantry": 70.0,
+		"splash": 100.0, "reload": 2.6, "is_air": false, "can_hit_air": true,
+		# 对空专精：打空中目标时伤害翻数倍，这是防空车存在的唯一理由
+		"aa_damage": 420.0, "aa_range": 1150.0,
+	},
+	VehKind.HELI: {
+		"name": "突击直升机", "key": "apc", "hp": 1250.0, "speed": 210.0, "radius": 36.0,
+		"mg_damage": 14.0, "cannon_damage": 420.0, "cannon_infantry": 190.0,
+		"splash": 130.0, "reload": 3.4, "is_air": true, "can_hit_air": true,
+		"aa_damage": 200.0, "aa_range": 900.0,
+	},
+	VehKind.CAR: {
+		"name": "突击车", "key": "apc", "hp": 700.0, "speed": 245.0, "radius": 24.0,
+		"mg_damage": 9.0, "cannon_damage": 60.0, "cannon_infantry": 45.0,
+		"splash": 80.0, "reload": 2.2, "is_air": false, "can_hit_air": false,
 	},
 }
+## 主动防御（ADS）拦截窗口与冷却。文档口径：开启时呈绿光，持续 7 秒后进入红光冷却期
 const APS_RANGE := 280.0
-const APS_DURATION := 6.0
+const APS_DURATION := 7.0
 const APS_COOLDOWN := 32.0
 
 # ---------------------------------------------------------------- 指令
@@ -148,6 +267,67 @@ const STREAK_REWARDS := {
 	12: {"kind": "tank", "text": "载具增援就绪 · 按 X 呼叫"},
 }
 
+# ---------------------------------------------------------------- 指挥官专属技能
+## side: any=双方通用 / attack=进攻方专属 / defend=防守方专属
+## window: 效果或标记的有效时长（秒）
+const CMD_SKILLS := {
+	"vip_point": {
+		"name": "高价值据点", "cost": 100.0, "cd": 210.0, "side": "any",
+		"window": 180.0, "reward": 150.0,
+		"desc": "标记目标据点，限时内占领或守住可得高额阵营积分",
+	},
+	"threat_veh": {
+		"name": "高威胁载具", "cost": 100.0, "cd": 240.0, "side": "any",
+		"window": 100.0, "reward": 120.0,
+		"desc": "标记敌方载具，全阵营可见 100 秒，摧毁后重奖",
+	},
+	"emergency": {
+		"name": "紧急增援", "cost": 100.0, "cd": 300.0, "side": "defend",
+		"window": 45.0,
+		"desc": "45 秒内己方重新部署时间大幅降低，配合点内信标快速补员",
+	},
+	"reinforce": {
+		"name": "阵线增援", "cost": 100.0, "cd": 240.0, "side": "attack",
+		"window": 45.0,
+		"desc": "45 秒内攻方重部署不扣兵力，用于一波流冲点",
+	},
+}
+
+# ---------------------------------------------------------------- 重火力支援
+## 用阵营积分兑换。走的是和连杀支援同一套落弹调度
+const HEAVY_SUPPORT := {
+	"artillery": {
+		"name": "炮兵齐射", "cost": 240.0, "cd": 120.0,
+		"shots": 10, "radius": 150.0, "inf": 200.0, "veh": 110.0,
+	},
+	"missile": {
+		"name": "制导导弹", "cost": 320.0, "cd": 150.0,
+		"shots": 1, "radius": 320.0, "inf": 380.0, "veh": 260.0,
+	},
+}
+
+# ---------------------------------------------------------------- 工事
+## 小队长可建，双方同时最多 1 个，新建替换旧的。
+## 冷却按文档：攻方 80 秒、守方 130 秒 —— 守方能先架好阵地，但换位代价更高
+const FORTIFICATIONS := {
+	"coastal": {
+		"name": "岸防炮", "cd_atk": 80.0, "cd_def": 130.0,
+		"hp": 900.0, "range": 950.0, "rate": 2.4, "damage": 180.0, "splash": 70.0, "anti": "ground",
+	},
+	"aa": {
+		"name": "防空炮", "cd_atk": 80.0, "cd_def": 130.0,
+		"hp": 700.0, "range": 1050.0, "rate": 1.1, "damage": 220.0, "splash": 90.0, "anti": "air",
+	},
+	"bunker": {
+		"name": "机枪碉堡", "cd_atk": 80.0, "cd_def": 130.0,
+		"hp": 1100.0, "range": 720.0, "rate": 0.11, "damage": 13.0, "splash": 0.0, "anti": "ground",
+	},
+	"vulcan": {
+		"name": "火神炮", "cd_atk": 80.0, "cd_def": 130.0,
+		"hp": 800.0, "range": 640.0, "rate": 0.07, "damage": 9.0, "splash": 0.0, "anti": "ground",
+	},
+}
+
 # ---------------------------------------------------------------- 输入动作名
 const ACTIONS := {
 	"move_up": [KEY_W], "move_down": [KEY_S], "move_left": [KEY_A], "move_right": [KEY_D],
@@ -155,6 +335,12 @@ const ACTIONS := {
 	"enter_vehicle": [KEY_F], "support": [KEY_X], "toggle_map": [KEY_M],
 	"scoreboard": [KEY_TAB], "cancel": [KEY_ESCAPE], "swap_ammo": [KEY_1], "swap_ammo2": [KEY_2],
 	"aps": [KEY_3], "mute": [KEY_N], "debug_toggle": [KEY_F3],
+	# 指挥部
+	"cmd_skill_1": [KEY_5], "cmd_skill_2": [KEY_6],
+	"heavy_1": [KEY_7], "heavy_2": [KEY_8],
+	"build_fort": [KEY_B],
+	# 倒地救援
+	"rescue": [KEY_G],
 }
 
 func _ready() -> void:

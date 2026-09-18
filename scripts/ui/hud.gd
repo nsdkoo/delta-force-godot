@@ -139,9 +139,131 @@ func _draw_hud() -> void:
 	_draw_banner(vp)
 	_draw_toast(vp)
 	_draw_hurt(vp)
+	_draw_rescue(vp, player)
+	_draw_marks(vp)
+	_draw_ops(vp)
 	# 计分板压在最上层：它是按住才会出现的临时界面
 	if force_scoreboard or Input.is_action_pressed("scoreboard"):
 		_draw_scoreboard(vp, player)
+
+# ============================================================ 倒地与救援
+## 倒地是"还能救回来的一段时间"，所以它必须在画面上有明确的读秒与入口提示，
+## 否则玩家只会以为自己死了
+func _draw_rescue(vp: Vector2, player: Soldier) -> void:
+	if player == null or not is_instance_valid(player):
+		return
+	for u in TeamManager.downed_units(player.team):
+		var sp := _to_screen(vp, u.global_position)
+		if sp == Vector2.INF:
+			continue
+		if sp.x < -40.0 or sp.y < -40.0 or sp.x > vp.x + 40.0 or sp.y > vp.y + 40.0:
+			continue
+		var pulse := 0.55 + 0.45 * sin(Time.get_ticks_msec() / 200.0)
+		layer_root.draw_arc(sp, 21.0, 0, TAU, 22, Color(1.0, 0.62, 0.25, pulse), 2.4)
+		var tag := ("你 · 待救援" if u.is_player else "%s · 待救援" % u.unit_name)
+		layer_root.draw_string(font, sp + Vector2(25, 4), "%s %.0fs" % [tag, u.bleed_out],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("#ffb45a"))
+	if player.downed:
+		layer_root.draw_rect(Rect2(0, vp.y * 0.5 - 84, vp.x, 168), _bg(0.58), true)
+		layer_root.draw_string(font_bold, Vector2(vp.x * 0.5 - 66, vp.y * 0.5 - 8), "倒 地",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 42, Color("#ffb45a"))
+		layer_root.draw_string(font, Vector2(vp.x * 0.5 - 200, vp.y * 0.5 + 30),
+			"流血 %.1fs · WASD 爬行 · 队友靠近按 G 拖拽救援，救起可回 %.0f%% 血"
+				% [maxf(0.0, player.bleed_out), GameConfig.REVIVE_HP_RATIO * 100.0],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Palette.UI_TEXT)
+	if player.drag_target != null and is_instance_valid(player.drag_target):
+		var k := clampf(player.drag_target.revive_progress / GameConfig.REVIVE_TIME, 0.0, 1.0)
+		var w := 280.0
+		var r := Rect2(vp.x * 0.5 - w * 0.5, vp.y - 196.0, w, 28.0)
+		_panel(r, 0.85)
+		layer_root.draw_rect(Rect2(r.position.x + 9, r.position.y + 9, (w - 18) * k, 10),
+			Color("#57e08a"), true)
+		layer_root.draw_string(font_bold, Vector2(r.position.x + 10, r.position.y + 19),
+			"救援中 %.0f%%" % (k * 100.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Palette.UI_TEXT)
+# ============================================================ 指挥部
+## 世界坐标 -> 屏幕坐标。HUD 是 CanvasLayer（屏幕空间），标记与落点在世界空间，
+## 中间必须换算一次
+func _to_screen(vp: Vector2, world: Vector2) -> Vector2:
+	var cam := get_viewport().get_camera_2d()
+	if cam == null:
+		return Vector2.INF
+	return (world - cam.global_position) * cam.zoom + vp * 0.5
+
+## 标记：五边形旗标 + 脉冲圈。敌我通用，靠颜色区分
+func _draw_marks(vp: Vector2) -> void:
+	if not MatchState.match_active and MatchState.phase != GameConfig.Phase.RESULT:
+		return
+	var col_map := {"vip_point": Palette.MARK_GOLD, "threat_veh": Palette.MARK_ATTACK}
+	for m in CommandOps.marks:
+		var sp := _to_screen(vp, m["pos"])
+		if sp == Vector2.INF:
+			continue
+		var col: Color = col_map.get(m["kind"], Palette.MARK_GOLD)
+		var pulse := 0.65 + 0.35 * sin(Time.get_ticks_msec() / 220.0)
+		layer_root.draw_arc(sp, 26.0 + pulse * 5.0, 0, TAU, 26, Color(col.r, col.g, col.b, 0.75), 2.4)
+		var pts := PackedVector2Array()
+		for i in 5:
+			var a := -PI * 0.5 + TAU * float(i) / 5.0
+			pts.append(sp + Vector2(cos(a), sin(a)) * 13.0)
+		layer_root.draw_colored_polygon(pts, Palette.OUTLINE)
+		var inner := PackedVector2Array()
+		for p in pts:
+			inner.append(sp + (p - sp) * 0.72)
+		layer_root.draw_colored_polygon(inner, col)
+		layer_root.draw_string(font_bold, sp + Vector2(20, -16), m["label"],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, col)
+
+## 阵营积分 + 指挥官技能栏。
+## 技能栏只在"玩家是指挥官"时出现 —— 不是指挥官的人看到一堆按不动的按钮
+## 只会添乱，而指挥官看不到自己的技能就等于这套系统不存在
+func _draw_ops(vp: Vector2) -> void:
+	if not MatchState.match_active and MatchState.phase != GameConfig.Phase.RESULT:
+		return
+	# 积分条：挂在据点状态下面
+	var y := 122.0
+	var txt := "阵营积分   GTI %d      哈夫克 %d" % [int(CommandOps.points[0]), int(CommandOps.points[1])]
+	var tw := 320.0
+	_panel(Rect2((vp.x - tw) * 0.5, y, tw, 26.0), 0.72)
+	layer_root.draw_string(font_bold, Vector2((vp.x - tw) * 0.5 + 14, y + 18), txt,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Palette.UI_TEXT)
+	if not MatchState.commander_is_player(GameConfig.Team.GTI):
+		return
+	# 指挥官技能栏
+	var ids := CommandOps.skill_defs(GameConfig.Team.GTI)
+	var rows: Array = []
+	var keys := ["[5]", "[6]"]
+	for i in ids.size():
+		var id: String = ids[i]
+		var d: Dictionary = GameConfig.CMD_SKILLS[id]
+		var cd := CommandOps.skill_cd_left(GameConfig.Team.GTI, id)
+		var st := "就绪" if cd <= 0.0 else "冷却 %.0fs" % cd
+		if CommandOps.points[GameConfig.Team.GTI] < float(d["cost"]):
+			st = "积分不足"
+		rows.append("%s %s  %d分  %s" % [keys[i] if i < keys.size() else "[-]", d["name"],
+			int(d["cost"]), st])
+	for kd in [["heavy_1", "artillery"], ["heavy_2", "missile"]]:
+		var hd: Dictionary = GameConfig.HEAVY_SUPPORT[kd[1]]
+		var hcd := CommandOps.heavy_cd_left(GameConfig.Team.GTI, kd[1])
+		var hst := "就绪" if hcd <= 0.0 else "冷却 %.0fs" % hcd
+		if CommandOps.points[GameConfig.Team.GTI] < float(hd["cost"]):
+			hst = "积分不足"
+		rows.append("%s %s  %d分  %s" % ["[7]" if kd[1] == "artillery" else "[8]",
+			hd["name"], int(hd["cost"]), hst])
+	var fcd := CommandOps.fort_cd_left(GameConfig.Team.GTI)
+	rows.append("[B] 架设工事  %s" % ("就绪" if fcd <= 0.0 else "冷却 %.0fs" % fcd))
+
+	var w2 := 300.0
+	var h2 := 16.0 + rows.size() * 19.0
+	var x2 := (vp.x - w2) * 0.5
+	var y2 := vp.y - h2 - 14.0
+	_panel(Rect2(x2, y2, w2, h2), 0.82)
+	layer_root.draw_string(font_bold, Vector2(x2 + 10, y2 + 16), "指挥官指令",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Palette.UI_GOLD_LIGHT)
+	var ry := y2 + 32.0
+	for r in rows:
+		layer_root.draw_string(font, Vector2(x2 + 10, ry), r,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Palette.UI_TEXT)
+		ry += 19.0
 
 func _player_vehicle(player: Soldier) -> CombatVehicle:
 	if player.in_vehicle == null or not is_instance_valid(player.in_vehicle):
@@ -188,18 +310,20 @@ func _draw_tickets(vp: Vector2) -> void:
 	# 条底
 	layer_root.draw_rect(Rect2(x, y, w, 12), Color(1, 1, 1, 0.08), true)
 	# 攻方（左）/守方（右）
-	var k0 := clampf(float(MatchState.tickets[0]) / float(GameConfig.TICKET_MAX[0]), 0.0, 1.0)
-	var k1 := clampf(float(MatchState.tickets[1]) / float(GameConfig.TICKET_MAX[1]), 0.0, 1.0)
+	var k0 := MatchState.ticket_ratio(0)
+	var k1 := MatchState.ticket_ratio(1)
 	layer_root.draw_rect(Rect2(x, y, half * k0, 12), GameConfig.TEAM_COLOR[0], true)
 	layer_root.draw_rect(Rect2(x + w - half * k1, y, half * k1, 12), GameConfig.TEAM_COLOR[1], true)
 	layer_root.draw_rect(Rect2(x + w * 0.5 - 3, y - 4, 6, 20), _bg(0.9), true)
 	# 文本
-	layer_root.draw_string(font_bold, Vector2(x + 4, y + 36), "GTI  %d" % MatchState.tickets[0],
+	layer_root.draw_string(font_bold, Vector2(x + 4, y + 36), "GTI  %s" % MatchState.tickets_text(0),
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 18, GameConfig.TEAM_COLOR[0])
-	layer_root.draw_string(font_bold, Vector2(x + w - 130, y + 36), "哈夫克  %d" % MatchState.tickets[1],
+	layer_root.draw_string(font_bold, Vector2(x + w - 130, y + 36), "哈夫克  %s" % MatchState.tickets_text(1),
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 18, GameConfig.TEAM_COLOR[1])
-	layer_root.draw_string(font, Vector2(x + w * 0.5 - 26, y + 36), MatchState.time_string(),
-		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Palette.UI_TEXT)
+	var clock := MatchState.overtime_label() if MatchState.overtime else MatchState.time_string()
+	var clock_col := Color("#ff5b4a") if MatchState.overtime else Palette.UI_TEXT
+	layer_root.draw_string(font, Vector2(x + w * 0.5 - 26, y + 36), clock,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, clock_col)
 
 func _draw_captures(vp: Vector2) -> void:
 	var n := GameConfig.CAPTURES.size()
@@ -262,7 +386,7 @@ func _draw_squad(vp: Vector2, player: Soldier) -> void:
 	for m in sq.members:
 		if not is_instance_valid(m):
 			continue
-		var col: Color = GameConfig.OPERATORS[m.op_class]["color"]
+		var col: Color = GameConfig.op(m.op_id)["color"]
 		if not m.alive:
 			col = Color(0.36, 0.42, 0.47)
 		layer_root.draw_circle(Vector2(x + 18, oy), 5.0, col)
@@ -295,9 +419,9 @@ func _draw_weapon(vp: Vector2, player: Soldier) -> void:
 			"弹匣 %d / %d    备弹 %d" % [player.ammo, player.weapon["mag"], player.reserve],
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Palette.UI_TEXT)
 	var sk_ready := player.skill_cd <= 0.0
-	var sk_col: Color = GameConfig.OPERATORS[player.op_class]["color"] if sk_ready else Color(0.36, 0.42, 0.47)
+	var sk_col: Color = GameConfig.op(player.op_id)["color"] if sk_ready else Color(0.36, 0.42, 0.47)
 	layer_root.draw_string(font, Vector2(x + 12, y + 70),
-		"[Q] %s%s" % [GameConfig.OPERATORS[player.op_class]["skill"],
+		"[Q] %s%s" % [GameConfig.op(player.op_id)["skill"],
 			"  就绪" if sk_ready else "  冷却 %.1fs" % player.skill_cd],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, sk_col)
 	layer_root.draw_string(font, Vector2(x + 12, y + 90),
@@ -549,7 +673,7 @@ func _draw_score_column(x: float, y: float, w: float, team: int, player: Soldier
 	layer_root.draw_string(font_bold, Vector2(x + 4, y + 20),
 		"%s · %s" % [GameConfig.TEAM_NAME[team], GameConfig.TEAM_ROLE[team]],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 16, col)
-	layer_root.draw_string(font, Vector2(x + w - 110, y + 20), "票数  %d" % MatchState.tickets[team],
+	layer_root.draw_string(font, Vector2(x + w - 110, y + 20), "兵力  %s" % MatchState.tickets_text(team),
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 15, col)
 	# 表头
 	var hy := y + 34.0

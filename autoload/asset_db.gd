@@ -25,6 +25,41 @@ const PAD := 4
 
 const OUTLINE_SHADER := "res://assets/shaders/outline.gdshader"
 
+# ---------------------------------------------------------------- Kenney 卡通包
+## Top-down Tanks Redux + Tower Defense（均为 CC0 1.0，可商用、免署名）。
+## 这两包的价值在于：素材本身就是"平涂 + 深色描边"的卡通风格，
+## 而且载具/弹丸直接提供 *_outline 版本 —— 轮廓是画进去的，比着色器描边干净。
+const DIR_KTILE := "res://assets/kenney/tiles/"
+const DIR_KFX := "res://assets/kenney/fx/"
+const DIR_KVEH := "res://assets/kenney/vehicles/"
+
+const K_TILES := [
+	"tree_green_large", "tree_green_small", "tree_green_leaf",
+	"tree_brown_large", "tree_brown_small",
+	"bush_large", "bush_small", "rock_large", "rock_small",
+	"crystal_ball", "crystal_star",
+	"barrel_rust", "barrel_green", "barrel_red", "barrel_black",
+	"crate_wood", "crate_metal", "barricade_wood", "barricade_metal",
+	"sandbag_beige", "sandbag_brown", "wire_straight", "wire_crooked",
+	"fence_red", "fence_yellow",
+	"oil_large", "oil_small", "tracks_small", "tracks_large", "tracks_double",
+	# 工事用的塔与炮（来自 Tower Defense 包）
+	"fort_bunker", "fort_gun", "fort_block", "fort_turret",
+	"air_plane", "flame", "marker_dot",
+]
+const K_FX := [
+	"exp_1", "exp_2", "exp_3", "exp_4", "exp_5",
+	"expsmoke_1", "expsmoke_2", "expsmoke_3", "expsmoke_4", "expsmoke_5",
+	"shot_large", "shot_orange", "shot_red", "shot_thin",
+]
+const K_HULLS := ["hull_blue", "hull_sand", "hull_red", "hull_dark", "hull_darklarge", "hull_bigred"]
+const K_TURRETS := [
+	"turret_blue_1", "turret_blue_2", "turret_blue_3",
+	"turret_sand_1", "turret_sand_2", "turret_sand_3",
+	"turret_red_1", "turret_red_2", "turret_red_3",
+	"turret_dark_1", "turret_dark_2", "turret_dark_3",
+]
+
 ## 干员贴图（按 GameConfig.OPERATORS[x].sprite 取用）
 const OP_TEXTURES := [
 	"soldier_rifle", "soldier_lmg", "soldier_reload",
@@ -56,6 +91,12 @@ func _ready() -> void:
 	_load_dir(DIR_OP, OP_TEXTURES, "op_")
 	_load_dir(DIR_TILE, TILE_TEXTURES, "tile_")
 	_load_dir(DIR_FX, FX_TEXTURES, "fx_")
+	_load_dir(DIR_KTILE, K_TILES, "kt_")
+	_load_dir(DIR_KFX, K_FX, "kf_")
+	for n in K_HULLS:
+		tex["kh_" + n] = _load(DIR_KVEH + n + ".png")
+	for n in K_TURRETS:
+		tex["kv_" + n] = _load(DIR_KVEH + n + ".png")
 	# 载具
 	for kind in VEH_TEXTURES:
 		for team in VEH_TEXTURES[kind]:
@@ -123,13 +164,13 @@ func logical_height(t: Texture2D) -> float:
 
 # ---------------------------------------------------------------- 取用
 func operator_texture(unit) -> Texture2D:
-	var key: String = GameConfig.OPERATORS[unit.op_class]["sprite"]
+	var key: String = GameConfig.op(unit.op_id)["sprite"]
 	if unit.is_reloading and tex.has("op_soldier_reload"):
 		return tex["op_soldier_reload"]
 	return tex.get("op_" + key, null)
 
-func operator_texture_for(op_class: int) -> Texture2D:
-	return tex.get("op_" + GameConfig.OPERATORS[op_class]["sprite"], null)
+func operator_texture_for(op_id: String) -> Texture2D:
+	return tex.get("op_" + GameConfig.op(op_id)["sprite"], null)
 
 ## 载具贴图：kind 可以是 "tank" / "apc" / "aa" / "heli" / "car"；
 ## 缺图时退回同阵营的通用车体，保证新载具不会因为没素材而隐身。
@@ -147,6 +188,24 @@ func vehicle_turret(kind: String, team: int) -> Texture2D:
 
 func tile(name: String) -> Texture2D:
 	return tex.get("tile_" + name, null)
+
+# ---------------------------------------------------------------- Kenney 取用
+func ktile(name: String) -> Texture2D:
+	return tex.get("kt_" + name, null)
+
+func kfx(name: String) -> Texture2D:
+	return tex.get("kf_" + name, null)
+
+func hull(name: String) -> Texture2D:
+	return tex.get("kh_" + name, null)
+
+func turret(name: String) -> Texture2D:
+	return tex.get("kv_" + name, null)
+
+## 爆炸序列的一帧。step 0..1 按进度取帧，用于把 5 张静帧连成一次爆炸
+func blast_frame(k: float, smoke: bool = false) -> Texture2D:
+	var idx := clampi(int(floor(clampf(k, 0.0, 1.0) * 5.0)), 0, 4)
+	return kfx(("expsmoke_" if smoke else "exp_") + str(idx + 1))
 
 func fx(name: String) -> Texture2D:
 	return tex.get("fx_" + name, null)

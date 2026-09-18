@@ -35,6 +35,10 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	if unit == null or not is_instance_valid(unit) or not unit.alive:
 		return
+	# 倒地的人不做决策，也不被指挥（由流血计时与救援者决定命运）
+	if unit.downed:
+		unit.move_dir = Vector2.ZERO
+		return
 	think_t -= delta
 	repath_t -= delta
 	if target_memory > 0.0:
@@ -43,10 +47,28 @@ func _physics_process(delta: float) -> void:
 		avoid_timer -= delta
 	if think_t <= 0.0:
 		think_t = 0.30 + randf() * 0.24
+		_check_rescue()
 		_think()
 	_act(delta)
 
 # ============================================================ 决策
+## 救人：倒地的队友是一个"二十秒兵力的窟窿"，救回来等于省下一次阵亡。
+## 只有支援与侦察会去救 —— 突击在前面顶线，回头救人等于把阵线让出去
+func _check_rescue() -> void:
+	if unit.downed:
+		return
+	if unit.drag_target != null:
+		if unit.drag_target.downed:
+			return
+		unit.release_drag()
+		return
+	if unit.op_class != GameConfig.OpClass.SUPPORT and unit.op_class != GameConfig.OpClass.RECON:
+		return
+	var t: Soldier = TeamManager.nearest_downed(unit.global_position, unit.team,
+		GameConfig.REVIVE_RANGE * 0.9)
+	if t != null:
+		unit.start_drag(t)
+
 func _think() -> void:
 	var my_pos := unit.global_position
 	# --- 索敌 ---

@@ -28,6 +28,26 @@ signal segment_unlocked(seg: int, seg_name: String)
 signal objective_changed(text: String)
 signal match_ended(win_team: int, title: String, subtitle: String)
 signal match_started()
+signal overtime_started(phase: int, point_id: String)
+
+# ---------------------------------------------------------------- 指挥部
+signal faction_points_changed(team: int, value: float, delta: float)
+signal cmd_skill_used(team: int, skill_id: String, pos: Vector2)
+signal cmd_skill_ready(team: int, skill_id: String, ready: bool)
+signal marked_target(team: int, kind: String, target_id: String, pos: Vector2, until: float)
+signal mark_completed(team: int, kind: String, target_id: String, points: float)
+signal heavy_support_used(team: int, kind: String, pos: Vector2)
+signal commander_replaced(team: int, new_name: String, by_player: bool)
+
+# ---------------------------------------------------------------- 工事
+signal fort_built(team: int, kind: String, pos: Vector2)
+signal fort_destroyed(team: int, kind: String)
+
+# ---------------------------------------------------------------- 倒地与救援
+signal unit_downed(unit: Node2D, killer: Node2D, bleed_out: float)
+signal unit_reviving(healer: Node2D, target: Node2D, needs: float)
+signal unit_revived(unit: Node2D)
+signal unit_drag_changed(unit: Node2D, dragged_by: Node2D)
 
 # ---------------------------------------------------------------- 指挥链
 signal commander_elected(team: int, cmd_name: String, is_player: bool, votes: int)

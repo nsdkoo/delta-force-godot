@@ -7,7 +7,8 @@ extends CharacterBody2D
 ## 可拦截来袭飞弹（对应真实玩法里"没有完全体别开出门"的设定）。
 ## ============================================================================
 
-enum Kind { TANK, APC }
+## 与 GameConfig.VehKind 一一对齐（顺序必须一致）
+enum Kind { TANK, APC, AA, HELI, CAR }
 
 var team: int = GameConfig.Team.GTI
 var kind: int = Kind.TANK
@@ -15,6 +16,10 @@ var alive: bool = true
 var hp: float = 3200.0
 var max_hp: float = 3200.0
 var radius: float = 40.0
+## 空中单位：无视建筑碰撞，子弹对它只有很低的基础伤害，得靠防空火力
+var is_air: bool = false
+## 具备对空专精：打空中目标时伤害按 aa_damage 算
+var can_hit_air: bool = false
 
 var move_dir: Vector2 = Vector2.ZERO
 var turret_dir: Vector2 = Vector2.RIGHT
@@ -37,6 +42,7 @@ var _data: Dictionary = {}
 var _body: Sprite2D
 var _turret: Sprite2D
 var _trail_t: float = 0.0
+var _aa_cd: float = 0.0
 
 ## 炮塔最大转速（弧度/秒）。约 150°/s —— 正面遭遇完全够用，
 ## 但被绕到侧后就追不上，这正是"侧翼包抄"能成立的原因。
@@ -51,32 +57,61 @@ func setup(p_team: int, p_kind: int) -> void:
 	kind = p_kind
 
 func _ready() -> void:
-	_data = GameConfig.VEHICLES[GameConfig.VehKind.TANK if kind == Kind.TANK else GameConfig.VehKind.APC]
+	_data = GameConfig.VEHICLES.get(kind, GameConfig.VEHICLES[GameConfig.VehKind.TANK])
 	max_hp = _data["hp"]
 	hp = max_hp
 	radius = _data["radius"]
+	is_air = bool(_data.get("is_air", false))
+	can_hit_air = bool(_data.get("can_hit_air", false))
 	body_angle = 0.0 if team == GameConfig.Team.GTI else PI
 	turret_angle = body_angle
 	collision_layer = GameConfig.Layer.VEHICLE
-	collision_mask = GameConfig.Layer.WORLD | GameConfig.Layer.VEHICLE
+	# 空中单位不撞建筑，也不撞别的车 —— 它从战场上方过
+	if is_air:
+		collision_mask = 0
+	else:
+		collision_mask = GameConfig.Layer.WORLD | GameConfig.Layer.VEHICLE
 	motion_mode = CharacterBody2D.MOTION_MODE_FLOATING
 	_build_visual()
 	TeamManager.register_vehicle(self)
-	EventBus.feed.emit("%s 载具已就位" % GameConfig.TEAM_NAME[team], GameConfig.team_color(team))
+	EventBus.feed.emit("%s 载具已就位 · %s" % [GameConfig.TEAM_NAME[team], display_name()],
+		GameConfig.team_color(team))
+
+## 载具外观表：kind -> [GTI 车体, GTI 炮塔, HAVOC 车体, HAVOC 炮塔]。
+## 用的是素材包里 *_outline 版本：轮廓是画家画进去的，比着色器描边干净，
+## 所以这些精灵不再挂描边材质（挂了会变成双层边）。
+## 炮塔分 3 种（细管 / 粗管 / 短管），正好对应坦克 / 防空 / 突击车的辨识需求
+const VEH_ART := {
+	Kind.TANK: {"hull": ["hull_blue", "hull_dark"], "turret": ["turret_blue_1", "turret_dark_1"]},
+	Kind.APC: {"hull": ["hull_sand", "hull_red"], "turret": ["turret_sand_2", "turret_red_2"]},
+	Kind.AA: {"hull": ["hull_sand", "hull_red"], "turret": ["turret_sand_3", "turret_red_3"]},
+	Kind.CAR: {"hull": ["hull_blue", "hull_red"], "turret": ["turret_blue_2", "turret_red_2"]},
+	# 武直没有现成素材，用塔防包里的俯视飞机 + 自绘旋翼环
+	Kind.HELI: {"hull": ["air_plane", "air_plane"], "turret": ["", ""]},
+}
 
 func _build_visual() -> void:
-	var kind_key := kind_key()
+	var art: Dictionary = VEH_ART.get(kind, VEH_ART[Kind.TANK])
+	var ti: int = 0 if team == GameConfig.Team.GTI else 1
+	var hull_name: String = art["hull"][ti]
+	var turret_name: String = art["turret"][ti]
+
 	_body = Sprite2D.new()
-	_body.texture = AssetDB.vehicle_body(kind_key, team)
+	_body.texture = AssetDB.ktile(hull_name)
+	if _body.texture == null:
+		_body.texture = AssetDB.vehicle_body(kind_key(), team)
 	_body.rotation = PI * 0.5            ## 素材车头朝上，转 90° 对齐 ang=0 朝右
 	_apply_scale(_body, radius * 2.05)
-	AssetDB.apply_outline(_body)
 	add_child(_body)
+
 	_turret = Sprite2D.new()
-	_turret.texture = AssetDB.vehicle_turret(kind_key, team)
+	if turret_name != "":
+		_turret.texture = AssetDB.turret(turret_name)
+	if _turret.texture == null:
+		_turret.texture = AssetDB.vehicle_turret(kind_key(), team)
+		AssetDB.apply_outline(_turret)
 	_turret.rotation = PI * 0.5
-	_apply_scale(_turret, radius * 0.74)
-	AssetDB.apply_outline(_turret)
+	_apply_scale(_turret, radius * 0.78)
 	add_child(_turret)
 	var shape := CircleShape2D.new()
 	shape.radius = radius * 0.86
@@ -84,7 +119,10 @@ func _build_visual() -> void:
 	cs.shape = shape
 	add_child(cs)
 
-## 车体底下的阵营色底座。整节点随车体旋转，所以矩形底座会自动对齐车身
+## 车体底下的阵营色底座 + ADS 状态环。
+## 文档口径：主动防御开启时载具外围呈绿光，进入冷却后转红光 ——
+## 这条视觉信息是反载具玩法的核心读牌（"看颜色决定现在打不打"），
+## 所以它必须贴在车体上，而不是只在 HUD 里给一行字
 func _draw() -> void:
 	if not alive:
 		return
@@ -95,6 +133,16 @@ func _draw() -> void:
 	draw_rect(box, Color(col.r, col.g, col.b, 0.92), true)
 	var inner := box.grow(-3.2)
 	draw_rect(inner, Color(col.r * 0.7, col.g * 0.7, col.b * 0.7, 0.9), true)
+	if is_air:
+		# 空中单位加一圈螺旋桨扬尘环，和地面载具区分开
+		draw_arc(Vector2.ZERO, radius * 1.55, 0, TAU, 28, Color(0.9, 0.88, 0.8, 0.35), 2.0)
+	var ring := radius * 1.34
+	if aps_timer > 0.0:
+		draw_arc(Vector2.ZERO, ring, 0, TAU, 30, Color("#57e08a"), 3.4)
+	elif aps_cd > 0.0:
+		# 冷却期红光呼吸，直观告诉对面"现在可以打"
+		var pulse := 0.35 + 0.3 * sin(Time.get_ticks_msec() / 160.0)
+		draw_arc(Vector2.ZERO, ring, 0, TAU, 30, Color(1.0, 0.32, 0.26, pulse), 2.6)
 
 func _apply_scale(sp: Sprite2D, target_w: float) -> void:
 	if sp.texture == null:
@@ -144,18 +192,50 @@ func _physics_process(delta: float) -> void:
 	if driver != null and is_instance_valid(driver):
 		driver.global_position = global_position
 
-	# 碾压步兵
-	for u in TeamManager.alive_units():
-		if u.team == team:
-			continue
-		if global_position.distance_to(u.global_position) < radius + 8.0:
-			u.take_damage(140.0 * delta * 6.0, driver)
+	# 碾压步兵：空中单位不参与（它是从头顶过的，不是从身上过的）
+	if not is_air:
+		for u in TeamManager.alive_units():
+			if u.team == team:
+				continue
+			if global_position.distance_to(u.global_position) < radius + 8.0:
+				u.take_damage(140.0 * delta * 6.0, driver)
+
+	if _aa_cd > 0.0:
+		_aa_cd -= delta
+	if can_hit_air:
+		_try_aa()
 
 	if want_fire:
 		_try_main_gun()
 		_try_mg()
 
 	queue_redraw()
+
+## 对空火力。这是防空车/武直存在的意义：普通枪械打空中目标只有 35% 伤害，
+## 而防空火力一次就是几百点，逼着进攻方必须先解决防空
+func _try_aa() -> void:
+	if _aa_cd > 0.0:
+		return
+	var best: CombatVehicle = null
+	var best_d := float(_data.get("aa_range", 900.0))
+	for v in TeamManager.vehicles:
+		if not is_instance_valid(v) or not v.alive or v.team == team or not v.is_air:
+			continue
+		var d := global_position.distance_to(v.global_position)
+		if d < best_d:
+			best_d = d
+			best = v
+	if best == null:
+		return
+	_aa_cd = 1.1
+	turret_dir = (best.global_position - global_position).normalized()
+	var dmg := damage_to_air()
+	EventBus.shot_fired.emit(self, global_position + turret_dir * radius, turret_dir, "aa_gun")
+	EventBus.explosion.emit(best.global_position, 1.4, "boom")
+	AudioManager.play_2d("shot_cannon", global_position, AudioManager.volume_for(global_position, _listener(), 500.0, 2800.0))
+	best.take_damage(dmg, driver)
+	if driver != null and driver.is_player:
+		EventBus.hitmarker.emit(false, best.hp <= 0.0, dmg)
 
 func _try_main_gun() -> void:
 	if fire_cd > 0.0:
@@ -267,8 +347,14 @@ func ammo_label() -> String:
 func display_name() -> String:
 	return _data.get("name", "载具")
 
+## 贴图键。新载具（防空车 / 武直 / 突击车）暂时复用最接近的现成素材，
+## 缺失时 AssetDB 会退回同阵营的通用车体
 func kind_key() -> String:
-	return "tank" if kind == Kind.TANK else "apc"
+	return _data.get("key", "tank" if kind == Kind.TANK else "apc")
+
+## 对空伤害：具备对空能力时用 aa_damage，否则按普通主炮伤害算
+func damage_to_air() -> float:
+	return float(_data.get("aa_damage", _data.get("cannon_damage", 100.0)))
 
 # ---------------------------------------------------------------- APS
 func activate_aps() -> bool:
@@ -295,6 +381,7 @@ func take_damage(amount: float, attacker: Soldier) -> void:
 	hp -= amount
 	if attacker != null and attacker.team != team:
 		attacker.damage_done += amount
+		attacker.vehicle_damage += amount
 		if attacker.is_player:
 			EventBus.hitmarker.emit(false, hp <= 0.0, amount)
 	if hp <= 0.0:

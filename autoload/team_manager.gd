@@ -83,12 +83,36 @@ func all_units(team: int = -1) -> Array:
 			out.append(u)
 	return out
 
+## 存活且"还能打"的单位。倒地的排除在外 ——
+## 倒地的人不该占点、不该被索敌、也不该被算进指挥官判断兵力的口径里
 func alive_units(team: int = -1) -> Array:
 	var out: Array = []
 	for u in units:
-		if is_instance_valid(u) and u.alive and (team < 0 or u.team == team):
+		if not is_instance_valid(u) or not u.alive or u.downed:
+			continue
+		if team < 0 or u.team == team:
 			out.append(u)
 	return out
+
+## 战场上等待救援的倒地单位（救援 AI 与 HUD 用）
+func downed_units(team: int = -1) -> Array:
+	var out: Array = []
+	for u in units:
+		if not is_instance_valid(u) or not u.alive or not u.downed:
+			continue
+		if team < 0 or u.team == team:
+			out.append(u)
+	return out
+
+func nearest_downed(from: Vector2, team: int, max_range: float) -> Soldier:
+	var best: Soldier = null
+	var best_d := max_range * max_range
+	for u in downed_units(team):
+		var d := from.distance_squared_to(u.global_position)
+		if d < best_d:
+			best_d = d
+			best = u
+	return best
 
 func alive_count(team: int) -> int:
 	return alive_units(team).size()

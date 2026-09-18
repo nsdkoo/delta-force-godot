@@ -64,9 +64,12 @@ func _spawn_forces() -> void:
 		var pattern: Array = SQUAD_PATTERN_GTI if team == GameConfig.Team.GTI else SQUAD_PATTERN_HAVOC
 		for i in GameConfig.TEAM_SIZE:
 			var op_class: int = pattern[i % pattern.size()]
+			# 同兵种里随机挑一个干员：编队保持职业比例，但每个人的技能被动不一样
+			var pool := GameConfig.op_ids_for_class(op_class)
+			var op_id: String = pool[rng.randi() % pool.size()] if pool.size() > 0 else ""
 			var nm := _unique_name(used)
 			var s: Soldier = SoldierScene.instantiate()
-			s.setup(team, op_class, nm, false)
+			s.setup(team, op_class, nm, false, op_id)
 			# 出生位置：基地附近，按队伍分左右
 			var base: Vector2 = GameConfig.BASE_POS[team]
 			var off_x := rng.randf_range(0.0, 190.0) if team == GameConfig.Team.GTI else rng.randf_range(-190.0, 0.0)
@@ -78,15 +81,29 @@ func _spawn_forces() -> void:
 			s.add_child(brain)
 
 # ---------------------------------------------------------------- 载具
+## 双方的载具编成不同：攻方多一台突击车用于快速运兵，
+## 守方多一台武直用于反装甲 —— 这和文档里"守方靠载具优势换时间"的思路一致
+const VEH_LOADOUT_GTI := [
+	[CombatVehicle.Kind.TANK, Vector2(60.0, -260.0)],
+	[CombatVehicle.Kind.APC, Vector2(30.0, 260.0)],
+	[CombatVehicle.Kind.AA, Vector2(110.0, 40.0)],
+	[CombatVehicle.Kind.CAR, Vector2(90.0, -80.0)],
+]
+const VEH_LOADOUT_HAVOC := [
+	[CombatVehicle.Kind.TANK, Vector2(-60.0, -260.0)],
+	[CombatVehicle.Kind.APC, Vector2(-30.0, 260.0)],
+	[CombatVehicle.Kind.AA, Vector2(-110.0, 40.0)],
+	[CombatVehicle.Kind.HELI, Vector2(-120.0, -180.0)],
+]
+
 func _spawn_vehicles() -> void:
 	for team in [GameConfig.Team.GTI, GameConfig.Team.HAVOC]:
 		var base: Vector2 = GameConfig.BASE_POS[team]
-		var side := 1.0 if team == GameConfig.Team.GTI else -1.0
-		for entry in [[CombatVehicle.Kind.TANK, Vector2(side * 60.0, -260.0)],
-				[CombatVehicle.Kind.APC, Vector2(side * 30.0, 260.0)]]:
+		var loadout: Array = VEH_LOADOUT_GTI if team == GameConfig.Team.GTI else VEH_LOADOUT_HAVOC
+		for entry in loadout:
 			var v := VehicleScript.new()
 			# setup 必须在入树之前：_ready 会按 kind 取数值表与贴图，
-			# 反过来写的话两辆车都会拿到默认的坦克数据，APC 就不存在了
+			# 反过来写的话所有车都会拿到默认的坦克数据
 			v.setup(team, entry[0])
 			world.units_root.add_child(v)
 			v.global_position = base + entry[1]
@@ -109,6 +126,9 @@ func _setup_commanders() -> void:
 		ai.set_script(CommanderScript)
 		var nm: String = CMD_NAMES[rng.randi() % CMD_NAMES.size()]
 		var is_player: bool = team == GameConfig.Team.GTI and MatchState.player_is_commander
+		# 把"这一方是不是玩家指挥"同步进 MatchState：指挥部系统与 AI 决策
+		# 都按 MatchState 判定，只在 AI 内部留一个 setup 时的快照会出现两边不一致
+		MatchState.set_commander_player(team, is_player)
 		ai.setup(team, nm, is_player)
 		add_child(ai)
 		commanders.append(ai)
@@ -116,9 +136,9 @@ func _setup_commanders() -> void:
 		EventBus.commander_elected.emit(team, nm, is_player, 0)
 
 # ---------------------------------------------------------------- 玩家
-func spawn_player(op_class: int, spawn_pos: Vector2) -> Soldier:
+func spawn_player(op_id: String, spawn_pos: Vector2) -> Soldier:
 	var s: Soldier = SoldierScene.instantiate()
-	s.setup(GameConfig.Team.GTI, op_class, "你", true)
+	s.setup(GameConfig.Team.GTI, int(GameConfig.op(op_id).get("class", 0)), "你", true, op_id)
 	s.position = spawn_pos
 	world.units_root.add_child(s)
 	s.is_commander = MatchState.player_is_commander
