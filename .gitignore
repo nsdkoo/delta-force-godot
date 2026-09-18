@@ -21,3 +21,7 @@ desktop.ini
 _bake_preview.jpg.import
 _bake_full.jpg.import
 _tex_preview.jpg.import
+
+# 临时下载的素材包（成品已拷入 assets/buildings|units_kr|decor_kr）
+assets/_incoming/
+

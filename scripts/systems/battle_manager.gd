@@ -60,21 +60,35 @@ func _spawn_captures() -> void:
 # ---------------------------------------------------------------- 部队
 func _spawn_forces() -> void:
 	var used := {}
+	# 当前开放区域的据点中心，用来把大部分兵力放到前线，而不是全挤在基地
+	var front_caps: Array = []
+	for c in GameConfig.CAPTURES:
+		if int(c["seg"]) == MatchState.unlocked_segment:
+			front_caps.append(c["pos"])
+	if front_caps.is_empty():
+		front_caps.append(GameConfig.CAPTURES[0]["pos"])
 	for team in [GameConfig.Team.GTI, GameConfig.Team.HAVOC]:
 		var pattern: Array = SQUAD_PATTERN_GTI if team == GameConfig.Team.GTI else SQUAD_PATTERN_HAVOC
 		for i in GameConfig.TEAM_SIZE:
 			var op_class: int = pattern[i % pattern.size()]
-			# 同兵种里随机挑一个干员：编队保持职业比例，但每个人的技能被动不一样
 			var pool := GameConfig.op_ids_for_class(op_class)
 			var op_id: String = pool[rng.randi() % pool.size()] if pool.size() > 0 else ""
 			var nm := _unique_name(used)
 			var s: Soldier = SoldierScene.instantiate()
 			s.setup(team, op_class, nm, false, op_id)
-			# 出生位置：基地附近，按队伍分左右
 			var base: Vector2 = GameConfig.BASE_POS[team]
-			var off_x := rng.randf_range(0.0, 190.0) if team == GameConfig.Team.GTI else rng.randf_range(-190.0, 0.0)
-			s.position = (base + Vector2(off_x, rng.randf_range(-520.0, 520.0))) \
-				.clamp(Vector2(70, 70), GameConfig.WORLD_SIZE - Vector2(70, 70))
+			# 前 4 人（第一小队）留在基地附近作预备队；其余 16 人撒到当前开放据点周围
+			# —— 这样开局就能看到 20v20 的前线对峙，而不是"地图空空只有自己"
+			var pos: Vector2
+			if i < GameConfig.SQUAD_SIZE:
+				var off_x := rng.randf_range(0.0, 190.0) if team == GameConfig.Team.GTI else rng.randf_range(-190.0, 0.0)
+				pos = base + Vector2(off_x, rng.randf_range(-520.0, 520.0))
+			else:
+				var cap: Vector2 = front_caps[i % front_caps.size()]
+				# 攻方从据点西侧压上，守方贴在据点东/侧翼
+				var side := -1.0 if team == GameConfig.Team.GTI else 1.0
+				pos = cap + Vector2(side * rng.randf_range(80.0, 260.0), rng.randf_range(-220.0, 220.0))
+			s.position = pos.clamp(Vector2(70, 70), GameConfig.WORLD_SIZE - Vector2(70, 70))
 			world.units_root.add_child(s)
 			var brain := Node.new()
 			brain.set_script(BotBrainScript)

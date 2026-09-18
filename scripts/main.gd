@@ -380,6 +380,10 @@ func _start_match() -> void:
 		var seg: int = clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)
 		pos = Vector2(GameConfig.SEGMENTS[seg]["x"] - 330.0, GameConfig.BASE_POS[GameConfig.Team.GTI].y)
 	var p: Soldier = battle.spawn_player(picked_op, pos)
+	# `-- --artview`：把玩家挪到城堡/村落前，方便截王国保卫战风建筑对照
+	if OS.get_cmdline_user_args().has("--artview"):
+		p.global_position = Vector2(2050.0, 1280.0)
+		pos = p.global_position
 	player_ctrl.attach(p, world.camera)
 	# 美术走查用的镜头推近，对所有启动模式都生效（--auto 也能放大看单位）
 	player_ctrl.zoom_override = _demo_zoom

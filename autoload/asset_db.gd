@@ -19,11 +19,30 @@ const DIR_OP := "res://assets/operators/"
 const DIR_VEH := "res://assets/vehicles/"
 const DIR_TILE := "res://assets/tiles/"
 const DIR_FX := "res://assets/fx/"
+const DIR_BLD := "res://assets/buildings/"
+const DIR_DECOR := "res://assets/decor_kr/"
 
 ## 贴图四周补的透明边（像素）。描边宽度 1.9 texel，留 4 像素足够
 const PAD := 4
 
 const OUTLINE_SHADER := "res://assets/shaders/outline.gdshader"
+
+## 军事风建筑贴图：优先 Kenney 工事/箱体，告别 Tiny Swords 中世纪塔楼
+## （城堡/蓝瓦民居和沥青路混在一起很怪）
+const BUILDING_VARIANTS := {
+	"house": ["crate_metal", "crate_wood", "fort_block"],
+	"warehouse": ["fort_block", "fort_bunker", "crate_metal"],
+	"block": ["fort_block", "fort_bunker"],
+	"tower": ["fort_bunker", "fort_turret", "fort_gun"],
+	"bunker": ["fort_bunker", "fort_gun"],
+	"wall": ["barricade_metal", "fence_yellow"],
+	"fence": ["fence_red", "wire_straight"],
+}
+const DECOR_NAMES := [
+	"tree1", "tree2", "tree3", "tree4",
+	"bush1", "bush2", "bush3", "bush4",
+	"rock1", "rock2", "rock3", "rock4",
+]
 
 # ---------------------------------------------------------------- Kenney 卡通包
 ## Top-down Tanks Redux + Tower Defense（均为 CC0 1.0，可商用、免署名）。
@@ -93,6 +112,12 @@ func _ready() -> void:
 	_load_dir(DIR_FX, FX_TEXTURES, "fx_")
 	_load_dir(DIR_KTILE, K_TILES, "kt_")
 	_load_dir(DIR_KFX, K_FX, "kf_")
+	_load_dir(DIR_DECOR, DECOR_NAMES, "dc_")
+	# Tiny Swords 建筑仅作兜底（当前默认走 Kenney 军事贴图）
+	_load_dir(DIR_BLD, [
+		"house", "house_b", "warehouse", "block", "tower", "bunker", "wall", "fence",
+		"castle", "house_warm", "house_cool", "house_sand",
+	], "bld_")
 	# 地形砖：Ground 区域平铺用（Tower Defense 包）
 	for n in ["ground_grass", "ground_grass_b", "ground_grass_c", "ground_dirt",
 			"ground_dirt_b", "ground_dirt_c", "ground_sand", "ground_sand_b",
@@ -115,11 +140,17 @@ func _load_dir(dir: String, names: Array, prefix: String) -> void:
 		tex[prefix + n] = _load(dir + n + ".png")
 
 func _load(path: String) -> Texture2D:
-	if not ResourceLoader.exists(path):
-		push_warning("AssetDB: 缺少素材 " + path)
-		return null
-	var t := load(path) as Texture2D
+	var t: Texture2D = null
+	if ResourceLoader.exists(path):
+		t = load(path) as Texture2D
+	elif FileAccess.file_exists(path):
+		# 新丢进工程、还没被编辑器导入的 PNG：直接按文件读，避免 ResourceLoader 报缺
+		var abs_path := ProjectSettings.globalize_path(path)
+		var img := Image.load_from_file(abs_path)
+		if img != null:
+			t = ImageTexture.create_from_image(img)
 	if t == null:
+		push_warning("AssetDB: 缺少素材 " + path)
 		return null
 	return _padded(t)
 
@@ -204,6 +235,23 @@ func gtile(name: String) -> Texture2D:
 func ktile(name: String) -> Texture2D:
 	return tex.get("kt_" + name, null)
 
+## Tiny Swords 装饰（树/灌木/石）
+func decor(name: String) -> Texture2D:
+	return tex.get("dc_" + name, null)
+
+## 建筑贴图：按类型轮换变体。军事包走 kenney/tiles，旧 Tiny Swords 作兜底
+func building(type: String, index: int = 0) -> Texture2D:
+	var variants: Array = BUILDING_VARIANTS.get(type, BUILDING_VARIANTS["house"])
+	var name: String = variants[index % variants.size()]
+	var t: Texture2D = tex.get("kt_" + name, null)
+	if t == null:
+		t = tex.get("bld_" + name, null)
+	if t == null:
+		t = tex.get("kt_fort_block", null)
+	if t == null:
+		t = tex.get("bld_house", null)
+	return t
+
 func kfx(name: String) -> Texture2D:
 	return tex.get("kf_" + name, null)
 
@@ -221,6 +269,8 @@ func blast_frame(k: float, smoke: bool = false) -> Texture2D:
 func fx(name: String) -> Texture2D:
 	return tex.get("fx_" + name, null)
 
+## Tiny Swords 建筑已自带描边；持枪干员用 Kenney，需要着色器描边
+const OPERATOR_HAS_BAKED_OUTLINE := false
 ## 干员贴图的世界显示宽度（像素）
 const OPERATOR_DRAW_WIDTH := 52.0
 ## 载具贴图相对碰撞半径的显示倍率

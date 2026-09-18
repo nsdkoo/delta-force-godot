@@ -99,7 +99,16 @@ func _test_mode_rules(p: Soldier) -> void:
 	_check("守方阵亡不扣兵力", MatchState.tickets[1] == before)
 	var atk: int = MatchState.tickets[0]
 	MatchState.add_tickets(0, 80)
-	_check("攻方兵力只减不增", MatchState.tickets[0] == atk, "%d" % MatchState.tickets[0])
+	_check("零散占点不回兵力", MatchState.tickets[0] == atk, "%d" % MatchState.tickets[0])
+	# 把票数压低再测整区回补
+	MatchState.tickets[0] = 40
+	var gained := MatchState.restore_attacker_tickets(GameConfig.SEGMENT_TICKET_BONUS)
+	_check("整区突破回补兵力", gained == 80 and MatchState.tickets[0] == 120,
+		"gained=%d tickets=%d" % [gained, MatchState.tickets[0]])
+	MatchState.tickets[0] = GameConfig.ATTACKER_TICKETS - 10
+	gained = MatchState.restore_attacker_tickets(80)
+	_check("兵力回补不超过上限 180", MatchState.tickets[0] == GameConfig.ATTACKER_TICKETS and gained == 10,
+		"%d / gained=%d" % [MatchState.tickets[0], gained])
 	_check("复活冷却为 20 秒", is_equal_approx(MatchState.respawn_delay_for(0), 20.0),
 		"%.0f" % MatchState.respawn_delay_for(0))
 

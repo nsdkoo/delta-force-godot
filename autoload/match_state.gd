@@ -156,14 +156,24 @@ func ticket_ratio(team: int) -> float:
 		return 1.0
 	return clampf(float(tickets[team]) / float(GameConfig.ATTACKER_TICKETS), 0.0, 1.0)
 
-## 增援。注意攻方兵力只有"被消耗"这一条路，没有回复：
-## 攻方手里唯一的资源就是那 180 点，占点与突破的奖励一律折算成阵营积分
-## （见 CommandOps）。否则打得越好兵力越涨，"兵力"就不再是压力了
+## 扣兵力（amount 必须为负）。正向回复请走 restore_attacker_tickets ——
+## 官方胜者为王只有「整区攻破」这一条兵力回补通道，零散占点不回票。
 func add_tickets(team: int, amount: int) -> void:
-	if tickets[team] == TICKETS_INFINITE or amount > 0:
+	if tickets[team] == TICKETS_INFINITE or amount >= 0:
 		return
 	tickets[team] = maxi(0, tickets[team] + amount)
 	EventBus.ticket_changed.emit(team, tickets[team], amount)
+
+## 整区突破回补攻方兵力，上限仍是 ATTACKER_TICKETS（180）
+func restore_attacker_tickets(amount: int) -> int:
+	if amount <= 0 or tickets[GameConfig.Team.GTI] == TICKETS_INFINITE:
+		return 0
+	var before: int = tickets[GameConfig.Team.GTI]
+	tickets[GameConfig.Team.GTI] = mini(GameConfig.ATTACKER_TICKETS, before + amount)
+	var gained: int = tickets[GameConfig.Team.GTI] - before
+	if gained != 0:
+		EventBus.ticket_changed.emit(GameConfig.Team.GTI, tickets[GameConfig.Team.GTI], gained)
+	return gained
 
 ## 阵亡扣兵力。守方无限，所以这里对守方是空操作 ——
 ## 守方唯一的损失是"丢掉据点"，而不是"死人扣资源"
@@ -269,7 +279,7 @@ func progress_of(id: String) -> float:
 func is_contested(id: String) -> bool:
 	return captures.get(id, {}).get("contested", false)
 
-## 区域推进：当前解锁区全占 -> 解锁下一段并奖励票数
+## 区域推进：当前解锁区全占 -> 解锁下一段，并按官方规则回补兵力与时间
 func try_advance_segment() -> void:
 	if unlocked_segment >= GameConfig.SEGMENTS.size() - 1:
 		return
@@ -282,12 +292,15 @@ func try_advance_segment() -> void:
 	if not all_owned:
 		return
 	unlocked_segment += 1
-	CommandOps.add_points(GameConfig.Team.GTI, float(GameConfig.SEGMENT_TICKET_BONUS), "区域突破")
+	var gained := restore_attacker_tickets(GameConfig.SEGMENT_TICKET_BONUS)
+	time_left += GameConfig.SEGMENT_TIME_BONUS
+	CommandOps.add_points(GameConfig.Team.GTI, 40.0, "区域突破")
 	var seg_name: String = GameConfig.SEGMENTS[seg_index]["name"]
 	var next_name: String = GameConfig.SEGMENTS[unlocked_segment]["name"]
 	EventBus.segment_unlocked.emit(seg_index, seg_name)
-	EventBus.feed.emit("区域突破！%s 全境控制 · 解锁 %s（阵营积分 +%d）"
-		% [seg_name, next_name, GameConfig.SEGMENT_TICKET_BONUS], Color("#ffd24a"))
+	EventBus.banner.emit("区域突破 · %s → %s" % [seg_name, next_name], Color("#ffd24a"), 4.2)
+	EventBus.feed.emit("区域突破！%s 全境控制 · 解锁 %s（兵力 +%d · 时间 +%.0fs）"
+		% [seg_name, next_name, gained, GameConfig.SEGMENT_TIME_BONUS], Color("#ffd24a"))
 	EventBus.objective_changed.emit("当前目标区域：" + next_name)
 
 func current_segment_name() -> String:

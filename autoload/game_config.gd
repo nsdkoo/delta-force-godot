@@ -43,7 +43,10 @@ const RESPAWN_DELAY := 20.0
 const LEADER_RESPAWN_BONUS := 5.0
 const CAP_TICKET_GAIN := 15
 const CAP_TICKET_LOSS := 10
+## 整区攻破后恢复兵力（官方：整体占领区域后进攻方恢复部分兵力）
 const SEGMENT_TICKET_BONUS := 80
+## 整区攻破后追加时间（秒）
+const SEGMENT_TIME_BONUS := 120.0
 
 # ---------------------------------------------------------------- 加时赛
 ## 攻方兵力耗尽但点内人数占优时触发。第一阶段只要点里还有攻方的人，

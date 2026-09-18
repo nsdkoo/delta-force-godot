@@ -25,6 +25,9 @@ var path_i: int = 0
 var repath_t: float = 0.0
 var think_t: float = 0.0
 var strafe_phase: float = 0.0
+var _stuck_t: float = 0.0
+var _stuck_anchor: Vector2 = Vector2.ZERO
+var _last_aim: Vector2 = Vector2.RIGHT
 
 func _ready() -> void:
 	unit = get_parent() as Soldier
@@ -109,13 +112,14 @@ func _goal_position() -> Vector2:
 	var order := _current_order()
 	if order != Vector2.INF:
 		return order
-	# 无指令：攻方推当前区域，守方退守最近己方据点
+	var seg := clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)
+	# 无指令：双方都围绕「当前开放区」——攻方推未占领点，守方死守开放区
+	# （已失守的前序区官方规则下守方也不再进入，这里用目标聚焦近似）
 	if unit.team == GameConfig.Team.GTI:
-		var seg := clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)
 		var best := Vector2.INF
 		var best_d := 1e12
 		for c in GameConfig.CAPTURES:
-			if c["seg"] != seg:
+			if int(c["seg"]) != seg:
 				continue
 			if MatchState.captures[c["id"]]["owner"] == GameConfig.Team.GTI:
 				continue
@@ -125,16 +129,21 @@ func _goal_position() -> Vector2:
 				best = c["pos"]
 		if best != Vector2.INF:
 			return best
-		return GameConfig.CAPTURES[0]["pos"]
+		# 当前区已全占但尚未推进信号时，压向下一段中线
+		var nxt := mini(seg + 1, GameConfig.SEGMENTS.size() - 1)
+		return Vector2(GameConfig.SEGMENTS[nxt]["x"], GameConfig.BASE_POS[GameConfig.Team.GTI].y)
 	else:
-		# 守方：守离自己最近且被威胁的据点
 		var best2 := Vector2.INF
 		var best_d2 := 1e12
 		for c in GameConfig.CAPTURES:
+			if int(c["seg"]) != seg:
+				continue
 			var st: Dictionary = MatchState.captures[c["id"]]
 			var weight := 1.0
-			if st["attackers"] > 0:
-				weight = 0.35
+			if int(st["attackers"]) > 0:
+				weight = 0.28
+			elif int(st["owner"]) == GameConfig.Team.GTI:
+				weight = 0.55
 			var d2: float = unit.global_position.distance_squared_to(c["pos"]) * weight
 			if d2 < best_d2:
 				best_d2 = d2
@@ -197,9 +206,11 @@ func _act_engage(delta: float) -> void:
 	var to_target := target.global_position - unit.global_position
 	var d := to_target.length()
 	unit.aim_dir = to_target / maxf(d, 0.001)
-	# 开火
+	_last_aim = unit.aim_dir
+	# 开火 —— 略降 AI 射速，避免 40 人同时哒哒哒把音效糊成「噔噔噔」
 	if d < unit.weapon["range"] and map != null and map.line_of_sight(unit.global_position, target.global_position):
-		unit.try_fire()
+		if randf() < 0.72:
+			unit.try_fire()
 		if unit.ammo <= 0:
 			unit.start_reload()
 	# 工程兵优先放巡飞弹打载具
@@ -234,27 +245,51 @@ func _act_hold(delta: float) -> void:
 	else:
 		unit.move_dir = Vector2.ZERO
 		unit.sprinting = false
-		# 驻守时缓慢扫视
+		# 驻守时缓慢扫视 —— 限速，避免 aim_dir 每帧猛转
 		strafe_phase += delta * 0.5
-		unit.aim_dir = unit.aim_dir.rotated(sin(strafe_phase) * delta * 0.7).normalized()
+		var sweep := _last_aim.rotated(sin(strafe_phase) * delta * 0.35)
+		if sweep.length_squared() > 0.001:
+			unit.aim_dir = sweep.normalized()
+			_last_aim = unit.aim_dir
 
 func _act_advance() -> void:
 	var goal := _goal_position()
 	_follow_path_or(goal)
 
 func _follow_path_or(goal: Vector2) -> void:
+	# 卡住检测：想走但几乎没挪窝 → 清空路径、绕开随机偏移再寻路
+	if unit.move_dir.length_squared() > 0.04:
+		var moved := unit.global_position.distance_to(_stuck_anchor)
+		if moved < 10.0:
+			_stuck_t += get_physics_process_delta_time()
+		else:
+			_stuck_t = 0.0
+			_stuck_anchor = unit.global_position
+		if _stuck_t > 0.55:
+			_stuck_t = 0.0
+			_stuck_anchor = unit.global_position
+			path = PackedVector2Array()
+			path_i = 0
+			repath_t = 0.0
+			goal += Vector2(randf_range(-280.0, 280.0), randf_range(-280.0, 280.0))
+			goal = goal.clamp(Vector2(80, 80), GameConfig.WORLD_SIZE - Vector2(80, 80))
+	else:
+		_stuck_t = 0.0
+		_stuck_anchor = unit.global_position
+
 	if map == null or not is_instance_valid(map):
 		unit.move_dir = (goal - unit.global_position).normalized()
+		_set_move_aim()
 		return
-	# 路径失效则重算
 	if path.is_empty() or path_i >= path.size():
 		if repath_t <= 0.0:
 			repath_t = 0.8 + randf() * 0.7
 			_repath(goal)
 		if path.is_empty():
 			unit.move_dir = (goal - unit.global_position).normalized()
+			_set_move_aim()
 			return
-	while path_i < path.size() and unit.global_position.distance_to(path[path_i]) < 22.0:
+	while path_i < path.size() and unit.global_position.distance_to(path[path_i]) < 28.0:
 		path_i += 1
 	if path_i >= path.size():
 		path = PackedVector2Array()
@@ -263,5 +298,13 @@ func _follow_path_or(goal: Vector2) -> void:
 	var dir := (path[path_i] - unit.global_position).normalized()
 	unit.move_dir = dir
 	unit.sprinting = unit.global_position.distance_to(goal) > 420.0 and state == State.ADVANCE
+	_set_move_aim()
+
+## 只有真的在移动时才改朝向，卡住时保持上一帧瞄准，杜绝墙角原地疯转
+func _set_move_aim() -> void:
+	if unit.get_real_velocity().length() < 18.0:
+		unit.aim_dir = _last_aim
+		return
 	if unit.move_dir.length_squared() > 0.01:
 		unit.aim_dir = unit.move_dir
+		_last_aim = unit.aim_dir

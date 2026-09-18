@@ -71,23 +71,33 @@ func display_progress() -> float:
 	return progress
 
 func _draw() -> void:
+	var locked := seg > MatchState.unlocked_segment
 	var col := GameConfig.team_color(own_team)
-	# 区域填充
-	draw_circle(Vector2.ZERO, radius, Color(col.r, col.g, col.b, 0.10))
-	# 外圈
-	draw_arc(Vector2.ZERO, radius, 0, TAU, 64, Color(col.r, col.g, col.b, 0.7), 4.0)
-	# 进度弧（从 -90° 顺时针）
+	if locked:
+		# 未开放据点：灰雾圈 + 锁标记，明确「先打前面的」
+		draw_circle(Vector2.ZERO, radius, Color(0.12, 0.12, 0.14, 0.22))
+		draw_arc(Vector2.ZERO, radius, 0, TAU, 64, Color(0.55, 0.55, 0.58, 0.45), 3.0)
+		var font_l := ThemeDB.fallback_font
+		draw_string(font_l, Vector2(-28, 6), "锁定", HORIZONTAL_ALIGNMENT_LEFT, -1, 18,
+			Color(0.72, 0.72, 0.76, 0.85))
+		draw_string(font_l, Vector2(-radius, -radius - 14), "%s %s" % [point_id, cap_name],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(0.7, 0.72, 0.76, 0.7))
+		return
+	# 区域填充 —— 当前前线据点更亮，方便在 20v20 混战里一眼找到目标
+	var fill_a := 0.16 if seg == MatchState.unlocked_segment else 0.10
+	draw_circle(Vector2.ZERO, radius, Color(col.r, col.g, col.b, fill_a))
+	draw_arc(Vector2.ZERO, radius, 0, TAU, 64, Color(col.r, col.g, col.b, 0.78), 4.5)
+	# 内环白描边，拉开「据点」和普通装饰的层次
+	draw_arc(Vector2.ZERO, radius - 10.0, 0, TAU, 48, Color(1, 1, 1, 0.18), 2.0)
 	if progress > 0.5:
 		var start := -PI * 0.5
 		var end := start + TAU * (progress / 100.0)
 		var pcol := Color("#ffd24a") if contested else col
 		draw_arc(Vector2.ZERO, radius - 6.0, start, end, 64, pcol, 6.0)
-	# 争夺闪烁
 	if contested:
 		var a := 0.35 + 0.35 * absf(sin(Time.get_ticks_msec() * 0.006))
 		draw_arc(Vector2.ZERO, radius + 6.0, 0, TAU, 64, Color(1.0, 0.82, 0.29, a), 3.0)
-	# 标签
 	var font := ThemeDB.fallback_font
 	var label := "%s %s" % [point_id, cap_name]
 	draw_string(font, Vector2(-radius, -radius - 14), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 20,
-		Color(0.94, 0.96, 0.98, 0.9))
+		Color(0.94, 0.96, 0.98, 0.95))

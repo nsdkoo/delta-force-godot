@@ -91,12 +91,11 @@ func _ready() -> void:
 	EventBus.unit_spawned.emit(self)
 
 ## 回到物理世界：重生与"从载具下车"共用同一份碰撞配置。
-## 抽出来是因为下车时也必须恢复 —— 少了这一步，车上会留一个看不见的碰撞体，
-## 或者下车的人再也撞不到建筑。
+## 只撞建筑/地形，不撞敌方身体 —— 20v20 前线若互推，人会在墙角原地打转卡死。
+## 子弹命中仍走射线查 TEAM 层，不受这里影响。
 func restore_physics() -> void:
 	collision_layer = GameConfig.team_layer(team)
 	collision_mask = GameConfig.Layer.WORLD
-	collision_mask |= GameConfig.Layer.TEAM_GTI if team == GameConfig.Team.HAVOC else GameConfig.Layer.TEAM_HAVOC
 	velocity = Vector2.ZERO
 	move_dir = Vector2.ZERO
 
@@ -143,7 +142,8 @@ func _apply_operator() -> void:
 			var k := AssetDB.OPERATOR_DRAW_WIDTH / AssetDB.logical_width(tex)
 			body.scale = Vector2(k, k)
 		body.modulate = _tint_for_team()
-		AssetDB.apply_outline(body)
+		if not AssetDB.OPERATOR_HAS_BAKED_OUTLINE:
+			AssetDB.apply_outline(body)
 
 ## 阵营靠脚下的圆盘区分，不靠给整张立绘染色。
 ## 染色会把描边和素材本身的颜色一起洗掉，卡通风格最怕这个；
@@ -220,9 +220,17 @@ func _physics_process(delta: float) -> void:
 		spd *= GameConfig.DRAG_SPEED_SCALE
 	velocity = move_dir * spd
 	move_and_slide()
-	# 朝向：始终朝瞄准方向
+	# 朝向只转贴图与枪口，根节点保持 0 —— 否则血条/名字跟着斜，卡住时还会原地疯转
+	rotation = 0.0
 	if aim_dir.length_squared() > 0.001:
-		rotation = aim_dir.angle()
+		var ang := aim_dir.angle()
+		if body != null:
+			body.rotation = ang
+		var muzzle_n := get_node_or_null("Muzzle") as Marker2D
+		if muzzle_n != null:
+			muzzle_n.position = aim_dir.normalized() * 24.0
+	if info != null:
+		info.rotation = 0.0
 	info.queue_redraw()
 	queue_redraw()
 
@@ -499,15 +507,24 @@ func _die(killer: Soldier, headshot: bool) -> void:
 		EventBus.player_death.emit(GameConfig.RESPAWN_DELAY)
 	AudioManager.play_2d("boom_small", global_position, -12.0)
 
-## 挑一个复活点：优先在己方控制的据点附近，其次退回基地
+## 挑一个复活点：优先当前开放区前线（胜者为王交战带），其次己方据点，最后基地
 func _pick_respawn_pos() -> Vector2:
 	var base: Vector2 = GameConfig.BASE_POS[team]
+	var seg := clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)
+	var front: Array = []
 	var owned: Array = []
 	for c in GameConfig.CAPTURES:
+		var pos: Vector2 = c["pos"]
+		if int(c["seg"]) == seg:
+			front.append(pos)
 		if MatchState.captures[c["id"]]["owner"] == team:
-			owned.append(c["pos"])
+			owned.append(pos)
 	var pos: Vector2
-	if not owned.is_empty() and randf() < 0.72:
+	var roll := randf()
+	if not front.is_empty() and roll < 0.78:
+		var side := -1.0 if team == GameConfig.Team.GTI else 1.0
+		pos = front[randi() % front.size()] + Vector2(side * randf_range(60, 200), randf_range(-140, 140))
+	elif not owned.is_empty() and roll < 0.92:
 		pos = owned[randi() % owned.size()] + Vector2(randf_range(-90, 90), randf_range(-90, 90))
 	else:
 		pos = base + Vector2(0, randf_range(-320, 320))

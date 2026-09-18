@@ -9,12 +9,13 @@
 
 | 来源 | 内容 | 授权 |
 |---|---|---|
-| [Kenney](https://kenney.nl) — **Top-down Tanks Redux** | 载具车体与炮塔（含 `*_outline` 描边版）、树木、灌木、岩石、油桶、木箱、拒马、沙袋、铁丝网、栅栏、油污、履带痕迹、爆炸 5 帧序列、爆炸烟 5 帧序列、曳光贴片、草地/沙地道路砖 | CC0 1.0 |
-| [Kenney](https://kenney.nl) — **Tower Defense (top-down)** | 工事用的塔与炮位（碉堡/炮位/炮塔）、俯视飞行器、火焰图标、地面散落物 | CC0 1.0 |
-| [Kenney](https://kenney.nl) — **Topdown Shooter** | 干员贴图（`assets/operators/`） | CC0 1.0 |
+| [Kenney](https://kenney.nl) — **Top-down Tanks Redux** + **Tower Defense** | 载具、工事、箱体、沙袋；**当前默认建筑主视觉**（军事俯视，替代 Tiny Swords 中世纪塔楼） | CC0 1.0 |
+| [Tiny Swords](https://pixelfrog-assets.itch.io/tiny-swords) — **Pixel Frog** | 建筑/装饰备用资源（仍保留在 `assets/buildings`、`assets/decor_kr`） | 可商用；禁止再分发素材包；建议署名 |
+| [Kenney](https://kenney.nl) — **Tower Defense (isometric)** | 等距塔件与地景细节（备用） | CC0 1.0 |
+| [CraftPix](https://craftpix.net) — **Stone Tower Game Assets** | 石塔/工事局部（备用） | Royalty-free |
 | [ambientCG](https://ambientcg.com) | 地表 PBR 材质（沙地 / 沥青 / 混凝土等），由 `_bake_terrain.py` 烘焙成 `assets/terrain/`。**当前默认关闭**（`jinqiu_map.gd` 的 `USE_BAKED_GROUND = false`）—— 照片质感的地表和卡通平涂的风格不兼容，文件保留备切换 | CC0 |
 
-CC0 允许商用、免署名。
+CC0 / Tiny Swords 许可均允许商用；Tiny Swords 建议署名 Pixel Frog，且不得把素材包原样再分发。
 
 ## 参考的开源项目
 

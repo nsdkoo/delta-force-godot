@@ -16,7 +16,7 @@ extends Node
 ## 两个开关都读 UserSettings：晕动症玩家必须能关掉震屏，这不是可选项。
 ## ============================================================================
 
-const MAX_SHAKE := 26.0
+const MAX_SHAKE := 10.0
 
 var shake: float = 0.0
 var _hitstop_left: float = 0.0
@@ -45,7 +45,7 @@ func hitstop(seconds: float) -> void:
 func _process(delta: float) -> void:
 	# 衰减用真实时间：顿帧期间 time_scale 被压低，若跟着缩放走会拖很久
 	var raw := delta / maxf(Engine.time_scale, 0.001)
-	shake = maxf(0.0, shake - raw * (34.0 + shake * 3.4))
+	shake = maxf(0.0, shake - raw * (48.0 + shake * 5.0))
 	if _hitstop_left > 0.0:
 		_hitstop_left -= raw
 		if _hitstop_left <= 0.0:
@@ -53,30 +53,30 @@ func _process(delta: float) -> void:
 		else:
 			Engine.time_scale = _hitstop_restore
 
-## 相机每帧取一次偏移。用两个不同频率的正弦叠随机，避免纯随机的抖动看起来像噪点
+## 相机每帧取一次偏移。用正弦叠轻微随机，避免噪点感
 func offset() -> Vector2:
 	if shake <= 0.01:
 		return Vector2.ZERO
 	var t := Time.get_ticks_msec() / 1000.0
-	var a := sin(t * 61.0) * 0.6 + randf_range(-0.4, 0.4)
-	var b := cos(t * 47.0) * 0.6 + randf_range(-0.4, 0.4)
+	var a := sin(t * 52.0) * 0.55 + randf_range(-0.2, 0.2)
+	var b := cos(t * 41.0) * 0.55 + randf_range(-0.2, 0.2)
 	return Vector2(a, b) * shake
 
 # ---------------------------------------------------------------- 事件接线
 func _on_explosion(_pos: Vector2, scale: float, _kind: String) -> void:
-	kick(3.6 * maxf(0.6, scale))
+	kick(1.4 * maxf(0.6, scale))
 
 func _on_hitmarker(_head: bool, lethal: bool, _dmg: float) -> void:
-	# 命中反馈做得极轻：这是每秒发生十几次的事件，强度给大了会晕
-	kick(0.9 if not lethal else 2.2)
+	# 命中几乎不震 —— 20v20 每秒十几次，再大就瞄不准
+	kick(0.25 if not lethal else 0.7)
 	if lethal:
-		hitstop(0.045)
+		hitstop(0.03)
 
 func _on_heavy(_team: int, kind: String, _pos: Vector2) -> void:
-	kick(9.0 if kind == "missile" else 6.0)
-	hitstop(0.07)
+	kick(3.5 if kind == "missile" else 2.4)
+	hitstop(0.05)
 
-## 玩家挨打：按来袭强度震一下。这是最需要即时反馈的一类事件
+## 玩家挨打：轻震即可，重震会让倒地/连挨打时完全没法操作
 func _on_player_hurt(_direction: float, intensity: float) -> void:
-	kick(3.2 + clampf(intensity, 0.0, 1.0) * 4.0)
-	hitstop(0.03)
+	kick(1.1 + clampf(intensity, 0.0, 1.0) * 1.6)
+	hitstop(0.02)

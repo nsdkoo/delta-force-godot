@@ -340,30 +340,41 @@ func _draw_captures(vp: Vector2) -> void:
 	var n := GameConfig.CAPTURES.size()
 	var cw := 52.0
 	var gap := 6.0
-	var total := n * cw + (n - 1) * gap
+	var seg_gap := 14.0
+	# A / B / C 三组之间多留缝，一眼看出「先打 A 再开 B」
+	var total := n * cw + (n - 1) * gap + 2.0 * seg_gap
 	var x := (vp.x - total) * 0.5
 	var y := 74.0
+	var last_seg := -1
 	for c in GameConfig.CAPTURES:
+		var cseg: int = int(c["seg"])
+		if last_seg >= 0 and cseg != last_seg:
+			x += seg_gap
+		last_seg = cseg
 		var st: Dictionary = MatchState.captures[c["id"]]
+		var unlocked := cseg <= MatchState.unlocked_segment
 		var own: bool = st["owner"] == GameConfig.Team.GTI
 		var col: Color = GameConfig.TEAM_COLOR[0] if own else GameConfig.TEAM_COLOR[1]
+		if not unlocked:
+			col = Color(0.55, 0.55, 0.58)
 		var r := Rect2(x, y, cw, 30)
 		layer_root.draw_rect(r, _bg(0.7), true)
-		# 进度填充（从下往上）
 		var prog: float = st["progress"] / 100.0
-		if prog > 0.001:
+		if unlocked and prog > 0.001:
 			layer_root.draw_rect(Rect2(x + 2, y + 28 - 26 * prog, cw - 4, 26 * prog),
 				Color(1.0, 0.82, 0.29, 0.45), true)
 		layer_root.draw_rect(r, col, false, 2.0)
-		if st["contested"]:
+		if unlocked and st["contested"]:
 			layer_root.draw_rect(r.grow(2.0), Color(1.0, 0.82, 0.29, 0.9), false, 2.0)
+		if cseg == MatchState.unlocked_segment:
+			layer_root.draw_rect(r.grow(3.0), Color(1.0, 0.82, 0.29, 0.55), false, 1.5)
 		layer_root.draw_string(font_bold, Vector2(x + 16, y + 21), c["id"],
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 15, col)
 		x += cw + gap
 	var seg := clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)
-	layer_root.draw_string(font, Vector2((vp.x - 260) * 0.5, y + 48),
-		"当前目标区域：" + GameConfig.SEGMENTS[seg]["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
-		Palette.UI_TEXT_DIM)
+	layer_root.draw_string(font, Vector2((vp.x - 280) * 0.5, y + 48),
+		"当前目标区域：" + GameConfig.SEGMENTS[seg]["name"] + " · 攻占本区全部据点解锁下一区",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Palette.UI_TEXT_DIM)
 
 func _draw_feed() -> void:
 	var y := 150.0

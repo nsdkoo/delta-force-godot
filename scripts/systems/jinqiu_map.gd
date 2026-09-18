@@ -19,6 +19,7 @@ var ground: Sprite2D
 var obstacles: StaticBody2D
 var units_root: Node2D
 var props_root: Node2D
+var buildings_root: Node2D
 var projectiles_root: Node2D
 var fx_layer: Node2D
 var camera: Camera2D
@@ -34,6 +35,7 @@ var rng := RandomNumberGenerator.new()
 var _fields: Array = []            ## {"pts","color"} 地形色块
 var _gtile_cache: Dictionary = {}  ## 地形砖缓存
 var terrain: Node2D = null         ## 地面绘制层（承接建筑投影）
+var segment_overlay: Node2D = null ## 区域锁定/前线分界（独立重绘，不拖累整图）
 var _tufts: Array = []             ## {"pos","size","color"} 草丛
 var _rocks: Array = []             ## {"pos","size"} 石堆
 
@@ -56,8 +58,10 @@ func _ready() -> void:
 	_register_occluders()
 	_generate_props()
 	_build_prop_nodes()
+	_build_building_sprites()
 	_build_obstacles()
 	_build_nav_grid()
+	_build_segment_overlay_node()
 	# 地景装饰要等建筑与碰撞都建好之后再撒，否则会撒进墙里
 	_generate_terrain_fields()
 	for t in ["ground_grass", "ground_grass_b", "ground_grass_c", "ground_dirt",
@@ -210,6 +214,68 @@ func _draw() -> void:
 	_draw_decor()
 	_draw_prop_shadows()
 	_draw_buildings()
+
+## 未开放区域蒙上灰雾 + 前线分界线，还原「按 A→B→C 顺序推进」的战场感
+func _build_segment_overlay_node() -> void:
+	segment_overlay = Node2D.new()
+	segment_overlay.name = "SegmentOverlay"
+	segment_overlay.z_index = 40
+	segment_overlay.light_mask = 0
+	segment_overlay.draw.connect(_draw_segment_overlay)
+	add_child(segment_overlay)
+	if not EventBus.segment_unlocked.is_connected(_on_segment_unlocked_visual):
+		EventBus.segment_unlocked.connect(_on_segment_unlocked_visual)
+	set_process(true)
+
+func _on_segment_unlocked_visual(_seg: int, _name: String) -> void:
+	if segment_overlay != null:
+		segment_overlay.queue_redraw()
+
+func _process(_delta: float) -> void:
+	# 前线黄线脉冲需要持续刷新；只重绘薄薄一层 overlay
+	if segment_overlay != null:
+		segment_overlay.queue_redraw()
+
+func _draw_segment_overlay() -> void:
+	if segment_overlay == null:
+		return
+	var unlocked := clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)
+	var h := GameConfig.WORLD_SIZE.y
+	for s in GameConfig.SEGMENTS:
+		var sid: int = int(s["id"])
+		if sid <= unlocked:
+			continue
+		var cx: float = float(s["x"])
+		var ww: float = float(s["w"])
+		var r := Rect2(cx - ww * 0.5, 0.0, ww, h)
+		segment_overlay.draw_rect(r, Color(0.06, 0.07, 0.09, 0.18), true)
+		var font := ThemeDB.fallback_font
+		segment_overlay.draw_string(font, Vector2(cx - 70.0, h * 0.5), "未开放 · " + str(s["name"]),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color(0.78, 0.8, 0.84, 0.55))
+	# 当前前线东界（下一区起点）画一条脉冲黄线
+	if unlocked < GameConfig.SEGMENTS.size() - 1:
+		var cur: Dictionary = GameConfig.SEGMENTS[unlocked]
+		var edge_x: float = float(cur["x"]) + float(cur["w"]) * 0.5
+		var pulse := 0.35 + 0.25 * absf(sin(Time.get_ticks_msec() * 0.003))
+		segment_overlay.draw_line(Vector2(edge_x, 40), Vector2(edge_x, h - 40),
+			Color(1.0, 0.82, 0.29, pulse), 3.0)
+		segment_overlay.draw_string(ThemeDB.fallback_font, Vector2(edge_x - 48, 56), "前线分界",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 0.82, 0.29, 0.75))
+	# 已拿下的前序区：淡蓝罩，表示攻方后方安全区
+	for s in GameConfig.SEGMENTS:
+		var sid2: int = int(s["id"])
+		if sid2 >= unlocked:
+			break
+		var all_ok := true
+		for c in GameConfig.CAPTURES:
+			if int(c["seg"]) == sid2 and MatchState.captures.get(c["id"], {}).get("owner", 1) != GameConfig.Team.GTI:
+				all_ok = false
+				break
+		if not all_ok:
+			continue
+		var cx2: float = float(s["x"])
+		var ww2: float = float(s["w"])
+		segment_overlay.draw_rect(Rect2(cx2 - ww2 * 0.5, 0.0, ww2, h), Color(0.25, 0.55, 0.95, 0.06), true)
 
 # ============================================================ 地面
 ## 载入离线烘焙的世界级地表贴图（Color + Normal）。
@@ -381,35 +447,34 @@ func _draw_roads() -> void:
 		_draw_road_band(Rect2(cx - 75, 1230, 150, 150), true, true, col_base, col_dark)
 
 func _draw_road_band(r: Rect2, horiz: bool, plain: bool, base: Color, dark: Color) -> void:
-	# 路基：整条路先用深色铺一遍当作轮廓底，再铺亮色路面。
-	# 卡通风格里"路比地高一层"靠的就是这一圈深边，而不是画阴影
-	draw_rect(r.grow(5.0), Palette.OUTLINE, true)
+	# 烬区土路：无高速路虚线，只有路基描边 + 压实土痕
+	draw_rect(r.grow(4.0), Color(0.28, 0.20, 0.12, 0.55), true)
 	draw_rect(r, base, true)
-	# 路面纹理：几条平行的浅色压痕，把平涂的路面拉出一点土质感
-	var bands := 6
+	var bands := 5
 	for i in bands:
-		var k := float(i) / float(bands - 1)
-		var a := 0.22 * sin(PI * k)
+		var k := float(i) / float(maxi(bands - 1, 1))
+		var a := 0.16 * sin(PI * k)
 		if horiz:
-			draw_rect(Rect2(r.position.x, r.position.y + r.size.y * k - 3, r.size.x, 6),
+			draw_rect(Rect2(r.position.x, r.position.y + r.size.y * k - 2.5, r.size.x, 5),
 				Color(dark.r, dark.g, dark.b, a), true)
 		else:
-			draw_rect(Rect2(r.position.x + r.size.x * k - 3, r.position.y, 6, r.size.y),
+			draw_rect(Rect2(r.position.x + r.size.x * k - 2.5, r.position.y, 5, r.size.y),
 				Color(dark.r, dark.g, dark.b, a), true)
-	# 中线
-	if not plain:
-		var dash := 38.0
-		var gap := 30.0
-		var total := r.size.x if horiz else r.size.y
-		var t := 0.0
-		while t < total:
-			if horiz:
-				draw_rect(Rect2(r.position.x + t, r.position.y + r.size.y * 0.5 - 2.5, dash, 5),
-					Color(1.0, 0.96, 0.84, 0.55), true)
-			else:
-				draw_rect(Rect2(r.position.x + r.size.x * 0.5 - 2.5, r.position.y + t, 5, dash),
-					Color(1.0, 0.96, 0.84, 0.55), true)
-			t += dash + gap
+	# 偶尔几道履带浅痕，替代中线虚线
+	if not plain and horiz:
+		var y := r.position.y + r.size.y * 0.38
+		var x := r.position.x + 40.0
+		while x < r.end.x - 80.0:
+			draw_rect(Rect2(x, y, 52.0, 3.0), Color(0.35, 0.26, 0.16, 0.18), true)
+			draw_rect(Rect2(x, y + r.size.y * 0.28, 52.0, 3.0), Color(0.35, 0.26, 0.16, 0.18), true)
+			x += 140.0
+	elif not plain and not horiz:
+		var x2 := r.position.x + r.size.x * 0.38
+		var y2 := r.position.y + 40.0
+		while y2 < r.end.y - 80.0:
+			draw_rect(Rect2(x2, y2, 3.0, 52.0), Color(0.35, 0.26, 0.16, 0.18), true)
+			draw_rect(Rect2(x2 + r.size.x * 0.28, y2, 3.0, 52.0), Color(0.35, 0.26, 0.16, 0.18), true)
+			y2 += 140.0
 
 # ============================================================ 卡通地景
 ## 纯绘制的地景装饰：草丛、石堆、灌木。
@@ -488,9 +553,9 @@ func _generate_props() -> void:
 	# 手绘地物的最大问题是"一眼能看出是程序画的"：形状单调、重复感强。
 	# 现成素材包一次给齐乔木 / 灌木 / 岩石 / 油桶 / 木箱 / 拒马 / 沙袋 / 铁丝网，
 	# 混着撒就能把战场铺满细节，而且每种都有 2-3 个变体不会重复
-	_scatter("tree", 40, 40.0, 78.0)
-	_scatter("bush", 44, 26.0, 52.0)
-	_scatter("rock", 26, 22.0, 46.0)
+	_scatter("tree", 40, 110.0, 175.0)
+	_scatter("bush", 44, 48.0, 86.0)
+	_scatter("rock", 26, 36.0, 64.0)
 	_scatter("barrel", 52, 20.0, 28.0)
 	_scatter("crate", 22, 22.0, 32.0)
 	_scatter("barricade", 18, 22.0, 30.0)
@@ -505,6 +570,23 @@ func _scatter(kind: String, n: int, smin: float, smax: float) -> void:
 
 ## 地物贴图：同一种类里随机挑变体，避免整片战场长得一模一样
 func _prop_texture(kind: String) -> Texture2D:
+	# 树/灌/石优先 Tiny Swords（王国保卫战风），其它仍用 Kenney
+	match kind:
+		"tree":
+			var tn := ["tree1", "tree2", "tree3", "tree4"]
+			var td := AssetDB.decor(tn[rng.randi() % tn.size()])
+			if td != null:
+				return td
+		"bush":
+			var bn := ["bush1", "bush2", "bush3", "bush4"]
+			var bd := AssetDB.decor(bn[rng.randi() % bn.size()])
+			if bd != null:
+				return bd
+		"rock":
+			var rn := ["rock1", "rock2", "rock3", "rock4"]
+			var rd := AssetDB.decor(rn[rng.randi() % rn.size()])
+			if rd != null:
+				return rd
 	var pool: Array = []
 	match kind:
 		"tree":
@@ -585,9 +667,9 @@ func _build_prop_nodes() -> void:
 		# 铁丝网用原始尺寸（它是一条带子，按 size 缩放会变形）
 		var k: float = 1.0 if kind == "wire" else size / AssetDB.logical_width(tex)
 		sp.scale = Vector2(k, k)
-		# 这些素材本身没有描边版本，用共享描边材质补一圈，
-		# 和载具上"画进去的描边"接上同一种视觉语言
-		AssetDB.apply_outline(sp)
+		# Tiny Swords 树/灌/石已自带厚描边；Kenney 地物仍补着色器描边
+		if kind not in ["tree", "bush", "rock"]:
+			AssetDB.apply_outline(sp)
 		props_root.add_child(sp)
 
 ## 地物投影仍画在地表图层：投影必须在所有地物之下，否则后画的树会把
@@ -734,114 +816,120 @@ func _solid_at(pos: Vector2, pad: float) -> bool:
 	return false
 
 func _draw_buildings() -> void:
+	# 全部建筑走精灵；_draw 只补脚下阴影，避免再出现程序色块房子
 	for b in buildings:
-		_draw_one_building(b)
+		_draw_building_shadow(b)
 
-## 建筑配色已统一收到 Palette.BUILD —— 改风格只需要改调色板一份
-
-func _draw_one_building(b: Dictionary) -> void:
+func _draw_building_shadow(b: Dictionary) -> void:
 	var r: Rect2 = b["rect"]
 	var height: float = b["height"]
 	var type: String = b["type"]
-	var c: Dictionary = Palette.BUILD.get(type, Palette.BUILD["house"])
-	# 围墙/栅栏的高度要单独压住：它们是"半人高的矮墙"，按普通建筑的比例
-	# 拉起 55~87 像素之后会变成一片片竖着的木板，完全不像墙
-	var off := clampf(height * (9.0 if type == "fence" or type == "wall" else 23.0), 8.0,
-		34.0 if type == "fence" or type == "wall" else 120.0)
-	var sx := -off * 0.44
-	var sy := -off * 0.58
-	var p := r.position
-	var sz := r.size
-	var w := sz.x
-	var hh := sz.y
-	# 硬投影：卡通风格里投影是"另一块更暗的色块"，不是柔和接触阴影，
-	# 所以偏移加大、不透明度统一，不做出渐隐
-	draw_rect(Rect2(p + Vector2(off * 0.58, off * 0.72), sz), Color(0.16, 0.12, 0.09, 0.34), true)
+	var off := clampf(height * (12.0 if type == "fence" or type == "wall" else 22.0), 12.0, 110.0)
+	# 两层投影：硬影贴脚底 + 略偏的软影，做出一点 2.5D 体量
+	var base := r.position + Vector2(r.size.x * 0.08, r.size.y * 0.55)
+	var soft := Rect2(base + Vector2(off * 0.55, off * 0.35), r.size * Vector2(0.95, 0.48))
+	draw_rect(soft, Color(0.08, 0.06, 0.05, 0.18), true)
+	var hard := Rect2(base + Vector2(off * 0.22, off * 0.18), r.size * Vector2(0.88, 0.38))
+	draw_rect(hard, Color(0.10, 0.07, 0.05, 0.34), true)
 
-	# ---- 三个面：南立面（受光最亮）/ 东立面（背光最暗）/ 顶面 ----
-	draw_colored_polygon(PackedVector2Array([
-		p + Vector2(0, hh), p + Vector2(w, hh),
-		p + Vector2(w + sx, hh + sy), p + Vector2(sx, hh + sy)]), c["s"])
-	draw_colored_polygon(PackedVector2Array([
-		p + Vector2(w, 0), p + Vector2(w, hh),
-		p + Vector2(w + sx, hh + sy), p + Vector2(w + sx, sy)]), c["e"])
-	var top := Rect2(p + Vector2(sx, sy), sz)
-	draw_rect(top, c["top"], true)
+## 军事风建筑：程序化 2.5D 沙色营房/碉堡（不再把小箱体贴在大底座上）
+func _build_building_sprites() -> void:
+	buildings_root = Node2D.new()
+	buildings_root.name = "BuildingSprites"
+	buildings_root.y_sort_enabled = true
+	buildings_root.z_index = 2
+	buildings_root.light_mask = 0
+	add_child(buildings_root)
+	var i := 0
+	for b in buildings:
+		_spawn_military_building(b, i)
+		i += 1
 
-	# ---- 顶面细节 ----
+func _spawn_military_building(b: Dictionary, index: int) -> void:
+	var type: String = b["type"]
+	var r: Rect2 = b["rect"]
+	var height: float = float(b.get("height", 4.0))
+	var root := Node2D.new()
+	root.position = r.position + Vector2(r.size.x * 0.5, r.size.y * 0.5)
+	root.z_index = int(r.position.y + r.size.y)
+	buildings_root.add_child(root)
+
+	var wall := Color("#b89a6a")
+	var roof := Color("#8a7350")
+	var trim := Color("#3a2e22")
 	match type:
-		"warehouse":
-			var x := 14.0
-			while x < w:
-				draw_rect(Rect2(top.position.x + x, top.position.y, 4, hh),
-					Color(0, 0, 0, 0.13), true)
-				draw_rect(Rect2(top.position.x + x + 4, top.position.y, 4, hh),
-					Color(1, 1, 1, 0.10), true)
-				x += 20.0
-		"tower":
-			# 地标高塔：顶面画一圈女儿墙 + 一个直升机坪十字
-			draw_rect(Rect2(top.position + Vector2(10, 10), sz - Vector2(20, 20)),
-				Palette.ROOF_TRIM.lerp(c["top"], 0.35), false, 3.0)
-			var cc := top.position + sz * 0.5
-			draw_line(cc + Vector2(-26, 0), cc + Vector2(26, 0), Palette.ROOF_TRIM, 4.0)
-			draw_line(cc + Vector2(0, -26), cc + Vector2(0, 26), Palette.ROOF_TRIM, 4.0)
-		"block":
-			var gx := 30.0
-			while gx < w - 20.0:
-				draw_rect(Rect2(top.position.x + gx, top.position.y + 14, 16, hh - 28),
-					Color(0, 0, 0, 0.14), true)
-				gx += 52.0
-		"wall", "fence":
-			var wx := 0.0
-			while wx < w:
-				draw_rect(Rect2(top.position.x + wx, top.position.y, 3, hh),
-					Color(0, 0, 0, 0.12), true)
-				wx += 18.0
-		"bunker":
-			var bcc := top.position + sz * 0.5
-			draw_circle(bcc, minf(w, hh) * 0.26, Palette.ROOF_TRIM)
-			draw_circle(bcc, minf(w, hh) * 0.18, c["top"].darkened(0.15))
-		_:
-			# 民居屋顶：一条屋脊 + 一个烟囱
-			draw_rect(Rect2(top.position + Vector2(6, 6), sz - Vector2(12, 12)),
-				Palette.ROOF_TRIM, false, 2.0)
-			var chim := Vector2(top.position.x + w * 0.72, top.position.y + hh * 0.24)
-			draw_rect(Rect2(chim, Vector2(13, 13)), Palette.OUTLINE, true)
-			draw_rect(Rect2(chim + Vector2(2, 2), Vector2(9, 9)), Palette.ROOF_TRIM, true)
+		"tower", "bunker":
+			wall = Color("#8f9288")
+			roof = Color("#5e6358")
+		"warehouse", "block":
+			wall = Color("#a89068")
+			roof = Color("#6e5c42")
+		"fence", "wall":
+			wall = Color("#6a5a40")
+			roof = Color("#4a3e2c")
 
-	# ---- 南立面细节：门与窗 ----
-	if type != "fence" and type != "wall" and hh >= 90.0:
-		var door_w := minf(26.0, w * 0.18)
-		var door := Rect2(p + Vector2(w * 0.5 - door_w * 0.5, hh - 30.0), Vector2(door_w, 30.0))
-		draw_rect(door, Palette.OUTLINE, true)
-		draw_rect(door.grow(-2.0), Color("#6b4326"), true)
-		var win_w := 18.0
-		var gx2 := 18.0
-		while gx2 < w - win_w - 12.0:
-			var win := Rect2(p + Vector2(gx2, hh - 40.0), Vector2(win_w, 16.0))
-			draw_rect(win.grow(1.6), Palette.OUTLINE, true)
-			draw_rect(win, Palette.WINDOW, true)
-			gx2 += 40.0
-
-	# ---- 描边：沿整个剪影走一圈闭合折线 ----
-	# 早先只在几条边上描线，转角处会断开；闭合成一个多边形之后轮廓是连续的，
-	# 这才有"贴纸边"的感觉
-	var sil := PackedVector2Array([
-		p + Vector2(0, hh),
-		p + Vector2(w, hh),
-		p + Vector2(w + sx, hh + sy),
-		p + Vector2(w + sx, sy),
-		p + Vector2(sx, sy),
-		p + Vector2(sx, hh + sy),
-		p + Vector2(0, hh)])
-	var closed := sil.duplicate()
-	closed.append(sil[0])
-	draw_polyline(closed, Palette.OUTLINE, 3.0, true)
-	# 面与面之间的内结构线用细一档的软描边
-	draw_line(p + Vector2(sx, sy), p + Vector2(w + sx, sy), Palette.OUTLINE_SOFT, 1.6)
-	draw_line(p + Vector2(sx, sy), p + Vector2(0, hh), Palette.OUTLINE_SOFT, 1.6)
-	draw_line(p + Vector2(w + sx, sy), p + Vector2(w, hh), Palette.OUTLINE_SOFT, 1.6)
-	draw_line(p + Vector2(sx, hh + sy), p + Vector2(0, hh), Palette.OUTLINE_SOFT, 1.6)
+	var w := r.size.x
+	var d := r.size.y
+	var roof_h := clampf(height * 10.0, 18.0, 52.0)
+	# 墙体
+	var body := Polygon2D.new()
+	body.polygon = PackedVector2Array([
+		Vector2(-w * 0.5, -d * 0.35), Vector2(w * 0.5, -d * 0.35),
+		Vector2(w * 0.5, d * 0.45), Vector2(-w * 0.5, d * 0.45),
+	])
+	body.color = wall
+	root.add_child(body)
+	# 屋顶（略上移，做出一点体量）
+	var top := Polygon2D.new()
+	top.polygon = PackedVector2Array([
+		Vector2(-w * 0.52, -d * 0.35 - roof_h * 0.15),
+		Vector2(w * 0.52, -d * 0.35 - roof_h * 0.15),
+		Vector2(w * 0.42, -d * 0.35 - roof_h),
+		Vector2(-w * 0.42, -d * 0.35 - roof_h),
+	])
+	top.color = roof
+	root.add_child(top)
+	# 描边
+	var edge := Line2D.new()
+	edge.width = 2.0
+	edge.default_color = trim
+	edge.closed = true
+	edge.points = body.polygon
+	root.add_child(edge)
+	# 门洞
+	if type != "fence" and type != "wall":
+		var door := Polygon2D.new()
+		var dw := minf(22.0, w * 0.22)
+		var dh := minf(28.0, d * 0.35)
+		door.polygon = PackedVector2Array([
+			Vector2(-dw * 0.5, d * 0.45 - dh), Vector2(dw * 0.5, d * 0.45 - dh),
+			Vector2(dw * 0.5, d * 0.45), Vector2(-dw * 0.5, d * 0.45),
+		])
+		door.color = Color(0.22, 0.18, 0.14)
+		root.add_child(door)
+	# 碉堡/塔：顶上叠一层小平台
+	if type == "tower" or type == "bunker":
+		var plat := Polygon2D.new()
+		plat.polygon = PackedVector2Array([
+			Vector2(-w * 0.28, -d * 0.35 - roof_h - 4.0),
+			Vector2(w * 0.28, -d * 0.35 - roof_h - 4.0),
+			Vector2(w * 0.22, -d * 0.35 - roof_h - 18.0),
+			Vector2(-w * 0.22, -d * 0.35 - roof_h - 18.0),
+		])
+		plat.color = roof.darkened(0.12)
+		root.add_child(plat)
+	# 偶发：门口挂沙袋贴图点缀，不作为主体
+	if index % 5 == 0 and type != "fence":
+		var bag: Texture2D = AssetDB.ktile("sandbag_brown")
+		if bag != null:
+			var sp := Sprite2D.new()
+			sp.texture = bag
+			sp.centered = true
+			sp.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			var lw := maxf(1.0, AssetDB.logical_width(bag))
+			sp.scale = Vector2.ONE * (36.0 / lw)
+			sp.position = Vector2(0, d * 0.42)
+			root.add_child(sp)
 
 # ============================================================ 碰撞
 func _build_obstacles() -> void:

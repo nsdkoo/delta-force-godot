@@ -1,6 +1,10 @@
 ; Engine configuration file.
-; 三角洲行动 · 全面战场 · 胜者为王（Godot 4.7）
-; 20v20 指挥官模式 · 烬区
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 
@@ -10,8 +14,8 @@ config/name="三角洲行动 · 全面战场 · 胜者为王"
 config/description="20v20 指挥官模式：票选指挥官、战术标记、攻防票数、干员反载具"
 run/main_scene="res://scenes/Main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
-config/icon="res://icon.svg"
 boot_splash/show_image=false
+config/icon="res://icon.svg"
 
 [autoload]
 
@@ -27,25 +31,17 @@ UserSettings="*res://autoload/user_settings.gd"
 ImpactFx="*res://autoload/impact_fx.gd"
 AppState="*res://autoload/app_state.gd"
 
-
-
 [display]
 
 window/size/viewport_width=1600
 window/size/viewport_height=900
-# 实际显示窗口缩小到 700x394（与 1600x900 同比例 16:9）。
-# 逻辑分辨率不变，所以 UI 布局与坐标计算都不受影响，只是看到的东西小一圈。
-window/size/window_width_override=700
-window/size/window_height_override=394
+window/size/window_width_override=1280
+window/size/window_height_override=720
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
-window/vsync/vsync_mode=1
 
 [importer_defaults]
 
-; 地表与法线贴图必须无损导入：
-;   compress/mode 0 = Lossless（VRAM 压缩会在法线图上留下可辨的块状瑕疵）
-;   detect_3d/compress_to 0 = 关闭「被 3D 场景引用时自动转压缩」的行为
 texture={
 "compress/mode": 0,
 "detect_3d/compress_to": 0,
@@ -66,16 +62,11 @@ texture={
 
 2d/default_gravity=0.0
 2d/default_gravity_vector=Vector2(0, 0)
-common/physics_ticks_per_second=60
 
 [rendering]
 
-renderer/rendering_method="forward_plus"
 renderer/rendering_method.mobile="gl_compatibility"
-textures/canvas_textures/default_texture_filter=1
-textures/default_filters/anisotropic_filtering_level=2
-environment/defaults/default_clear_color=Color(0.11, 0.094, 0.076, 1)
-environment/glow/upscale_mode=0
-2d/snap/snap_2d_transforms_to_pixel=false
-anti_aliasing/quality/msaa_2d=1
 viewport/hdr_2d=true
+anti_aliasing/quality/msaa_2d=1
+environment/glow/upscale_mode=0
+environment/defaults/default_clear_color=Color(0.11, 0.094, 0.076, 1)
