@@ -195,6 +195,9 @@ func _draw_rescue(vp: Vector2, player: Soldier) -> void:
 ## 世界坐标 -> 屏幕坐标。HUD 是 CanvasLayer（屏幕空间），标记与落点在世界空间，
 ## 中间必须换算一次
 func _to_screen(vp: Vector2, world: Vector2) -> Vector2:
+	var view := get_tree().get_first_node_in_group("battlefield_view")
+	if view != null:
+		return view.world_to_screen(world)
 	var cam := get_viewport().get_camera_2d()
 	if cam == null:
 		return Vector2.INF
@@ -303,8 +306,8 @@ func _panel(r: Rect2, alpha: float = 0.88) -> void:
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = Color(Palette.UI_WOOD.r, Palette.UI_WOOD.g, Palette.UI_WOOD.b, a)
 		sb.border_color = Color(Palette.UI_GOLD.r, Palette.UI_GOLD.g, Palette.UI_GOLD.b, minf(1.0, a + 0.30))
-		sb.set_border_width_all(2)
-		sb.set_corner_radius_all(8)
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(2)
 		_sb_cache[key] = sb
 	layer_root.draw_style_box(_sb_cache[key], r)
 
@@ -518,7 +521,7 @@ func _map_buildings() -> Array:
 func _draw_crosshair(vp: Vector2, player: Soldier) -> void:
 	if not player.alive:
 		return
-	var c := vp * 0.5
+	var c := layer_root.get_global_mouse_position()
 	var spread := 16.0 + player.spread_heat * 22.0
 	if player.aiming_down_sight:
 		spread -= 8.0

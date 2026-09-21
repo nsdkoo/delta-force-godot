@@ -418,7 +418,8 @@ func _poll_input() -> void:
 	var has_player: bool = p != null and is_instance_valid(p) and p.alive
 	var target := Vector2.INF
 	if has_player:
-		target = p.get_global_mouse_position()
+		var view := get_tree().get_first_node_in_group("battlefield_view")
+		target = view.mouse_world() if view != null else p.get_global_mouse_position()
 
 	# 架工事只需要小队长身份，不需要指挥权
 	if Input.is_action_just_pressed("build_fort"):

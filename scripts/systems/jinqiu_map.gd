@@ -1038,3 +1038,6 @@ func line_of_sight(from: Vector2, to: Vector2) -> bool:
 
 func is_walkable(p: Vector2) -> bool:
 	return not _solid_at(p, 12.0)
+
+func safe_spawn(pos: Vector2) -> Vector2:
+	return cell_to_world(_nearest_open(_clamp_cell(world_to_cell(pos))))

@@ -89,7 +89,7 @@ func _move_on_foot(delta: float) -> void:
 		and input_dir.length() > 0.15 and ads < 0.4 and not soldier.aiming_down_sight
 
 	# --- 瞄准（鼠标世界坐标）---
-	var mouse_world := soldier.get_global_mouse_position()
+	var mouse_world := world_mouse()
 	var to_mouse := mouse_world - soldier.global_position
 	if to_mouse.length_squared() > 4.0:
 		soldier.aim_dir = to_mouse.normalized()
@@ -172,7 +172,7 @@ func _drive_vehicle(delta: float) -> void:
 	vehicle.move_dir = input_dir
 
 	# --- 炮塔（鼠标世界坐标，按转速限制追过去，不是瞬间对准）---
-	var mouse_world := vehicle.get_global_mouse_position()
+	var mouse_world := world_mouse()
 	var to_mouse := mouse_world - vehicle.global_position
 	if to_mouse.length_squared() > 64.0:
 		vehicle.turret_dir = to_mouse.normalized()
@@ -220,12 +220,12 @@ func _use_skill() -> void:
 				target_pos = veh.global_position
 			else:
 				var en := TeamManager.nearest_visible_enemy(soldier.global_position, soldier.team, 900.0)
-				target_pos = en.global_position if en != null else soldier.get_global_mouse_position()
+				target_pos = en.global_position if en != null else world_mouse()
 			if map != null and map.has_method("spawn_missile"):
 				map.spawn_missile(soldier, target_pos, veh)
 			EventBus.toast.emit("巡飞弹已发射 · 追踪目标", Color("#ffc24a"))
 		GameConfig.OpClass.ASSAULT:
-			var throw_at := soldier.get_global_mouse_position()
+			var throw_at := world_mouse()
 			if map != null and map.has_method("spawn_grenade"):
 				map.spawn_grenade(soldier, throw_at)
 			EventBus.toast.emit("动能手雷已投掷", Color("#ff6b57"))
@@ -255,3 +255,9 @@ func _use_field_med() -> void:
 			u.hp = minf(u.max_hp, u.hp + 25.0)
 			healed += 1
 	EventBus.toast.emit("野战急救 · 治疗 %d 名友军" % healed, Color("#57e08a"))
+
+func world_mouse() -> Vector2:
+	var view := get_tree().get_first_node_in_group("battlefield_view")
+	if view != null:
+		return view.mouse_world()
+	return soldier.get_global_mouse_position()

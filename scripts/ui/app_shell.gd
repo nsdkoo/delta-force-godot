@@ -57,7 +57,7 @@ func _fresh(title: String, subtitle: String) -> Control:
 	root.add_child(box)
 	# 左侧压暗：让按钮列从战场背景里"跳"出来，同时不遮死画面
 	var veil := ColorRect.new()
-	veil.color = Color(0.06, 0.04, 0.03, 0.62)
+	veil.color = Color(0.03, 0.07, 0.06, 0.18)
 	veil.set_anchors_preset(Control.PRESET_FULL_RECT)
 	veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(veil)
@@ -118,7 +118,7 @@ func show_main_menu() -> void:
 	if _page == "main":
 		return
 	_page = "main"
-	var box := _fresh("胜者为王", "三角洲行动 · 全面战场 · 20 vs 20 攻防")
+	var box := _fresh("胜者为王", "烬区行动 / ASH FRONT     ·     斜俯视战术攻防")
 	var b1 := _menu_button(box, "开 始 游 戏", 214.0, true)
 	b1.pressed.connect(func(): get_parent().begin_new_match())
 	var b2 := _menu_button(box, "设  置", 278.0)
@@ -130,21 +130,21 @@ func show_main_menu() -> void:
 	# 用 Panel（不是 PanelContainer）—— 容器会把子节点全部 fit 进自己的矩形，
 	# 绝对定位就废了，这是部署页踩过的同一个坑
 	var card := Panel.new()
-	card.position = Vector2(596, 96)
-	card.size = Vector2(452, 168)
+	card.position = Vector2(596, 590)
+	card.size = Vector2(452, 180)
 	card.add_theme_stylebox_override("panel", Palette.panel_style(0.9, 2.0))
 	box.add_child(card)
 	var info := Label.new()
-	info.position = Vector2(618, 116)
+	info.position = Vector2(22, 18)
 	info.add_theme_font_size_override("font_size", 14)
 	info.add_theme_color_override("font_color", Palette.UI_TEXT)
-	info.text = "地图  烬区
-模式  指挥官 · 20v20
-编成  8 突击 / 6 支援 / 3 工程 / 3 侦察
-载具  主战坦克 · 装甲车 · 防空车 · 武直 · 突击车"
+	info.text = "行动简报  /  OPERATION BRIEF
+推进 A → B → C，夺取当前区域的全部据点
+票选指挥官 · 小队协同 · 步坦配合 · 倒地救援
+20v20 离线演练，其他队员由 AI 控制"
 	card.add_child(info)
 	var tip := Label.new()
-	tip.position = Vector2(618, 216)
+	tip.position = Vector2(22, 138)
 	tip.add_theme_font_size_override("font_size", 13)
 	tip.add_theme_color_override("font_color", Palette.UI_GOLD_LIGHT)
 	tip.text = "提示  控点 > 杀人。攻方兵力只有 180，守方无限。"

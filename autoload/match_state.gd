@@ -99,7 +99,11 @@ func _process(delta: float) -> void:
 ## 这条规则把"最后一个点到底归谁"从"看读秒"变成了"看谁还站在圈里"
 func _attacker_holds_any_point() -> bool:
 	for c in GameConfig.CAPTURES:
-		if TeamManager.count_in_radius(c["pos"], c["radius"], GameConfig.Team.GTI) > 0:
+		if c.seg != unlocked_segment or captures[c.id].owner == GameConfig.Team.GTI:
+			continue
+		var attackers := TeamManager.count_in_radius(c["pos"], c["radius"], GameConfig.Team.GTI)
+		var defenders := TeamManager.count_in_radius(c["pos"], c["radius"], GameConfig.Team.HAVOC)
+		if attackers > defenders:
 			return true
 	return false
 
@@ -114,7 +118,9 @@ func _start_overtime() -> void:
 	# 找出"还站在里面"的那个据点，它就是加时赛的胜负手
 	overtime_point = ""
 	for c in GameConfig.CAPTURES:
-		if TeamManager.count_in_radius(c["pos"], c["radius"], GameConfig.Team.GTI) > 0:
+		if c.seg != unlocked_segment or captures[c.id].owner == GameConfig.Team.GTI:
+			continue
+		if TeamManager.count_in_radius(c["pos"], c["radius"], GameConfig.Team.GTI) > TeamManager.count_in_radius(c["pos"], c["radius"], GameConfig.Team.HAVOC):
 			overtime_point = c["id"]
 			break
 	EventBus.banner.emit("加时赛 · %s（%.0fs）" % [overtime_point, GameConfig.OVERTIME_PHASE1],
@@ -237,7 +243,8 @@ func _on_capture_flipped(id: String, from_team: int, to_team: int) -> void:
 ## 这条是烬区这张图的彩蛋：地图机制一旦触发就改变"哪些点还需要争"，
 ## 比单纯加数值有意思得多
 func is_locked(id: String) -> bool:
-	return id == "C1" and c1_shattered
+	var capture := _cap_def(id)
+	return (id == "C1" and c1_shattered) or (not capture.is_empty() and capture.seg < unlocked_segment)
 
 func register_missile_hit(pos: Vector2) -> void:
 	if c1_shattered:

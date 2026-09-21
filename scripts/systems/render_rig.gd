@@ -47,7 +47,6 @@ var _env: Environment
 func _ready() -> void:
 	name = "RenderRig"
 	z_index = -100
-	_build_environment()
 	_build_ambient()
 	_build_sun()
 	occluders = Node2D.new()

@@ -26,7 +26,7 @@ static func _btn(bg: Color, border: Color) -> StyleBoxFlat:
 	sb.bg_color = bg
 	sb.border_color = border
 	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(9)
+	sb.set_corner_radius_all(2)
 	sb.content_margin_left = 14
 	sb.content_margin_right = 14
 	sb.content_margin_top = 7
@@ -38,7 +38,7 @@ static func _panel(alpha: float = 0.96) -> StyleBoxFlat:
 	sb.bg_color = Color(Palette.UI_WOOD.r, Palette.UI_WOOD.g, Palette.UI_WOOD.b, alpha)
 	sb.border_color = Color(Palette.UI_GOLD.r, Palette.UI_GOLD.g, Palette.UI_GOLD.b, 0.9)
 	sb.set_border_width_all(3)
-	sb.set_corner_radius_all(12)
+	sb.set_corner_radius_all(3)
 	sb.set_content_margin_all(18)
 	return sb
 

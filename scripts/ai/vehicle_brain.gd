@@ -22,6 +22,11 @@ func _ready() -> void:
 	stuck_check = veh.global_position
 
 func _physics_process(delta: float) -> void:
+	if not MatchState.match_active:
+		if veh != null:
+			veh.want_fire = false
+			veh.move_dir = Vector2.ZERO
+		return
 	if veh == null or not is_instance_valid(veh) or not veh.alive:
 		return
 	if veh.driver != null:

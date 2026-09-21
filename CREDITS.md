@@ -14,6 +14,8 @@
 | [Kenney](https://kenney.nl) — **Tower Defense (isometric)** | 等距塔件与地景细节（备用） | CC0 1.0 |
 | [CraftPix](https://craftpix.net) — **Stone Tower Game Assets** | 石塔/工事局部（备用） | Royalty-free |
 | [ambientCG](https://ambientcg.com) | 地表 PBR 材质（沙地 / 沥青 / 混凝土等），由 `_bake_terrain.py` 烘焙成 `assets/terrain/`。**当前默认关闭**（`jinqiu_map.gd` 的 `USE_BAKED_GROUND = false`）—— 照片质感的地表和卡通平涂的风格不兼容，文件保留备切换 | CC0 |
+| [Kenney Nature Kit 2.1](https://kenney.nl/assets/nature-kit) | 新版 2.5D 植物、岩石与露营小物，整理到 `assets/field_kit/nature`，保留包内许可文件 | CC0 |
+| [Kenney Space Kit](https://kenney.nl/assets/space-kit) | 工业件参考与可替换细节，整理到 `assets/field_kit/industrial` | CC0 |
 
 CC0 / Tiny Swords 许可均允许商用；Tiny Swords 建议署名 Pixel Frog，且不得把素材包原样再分发。
 

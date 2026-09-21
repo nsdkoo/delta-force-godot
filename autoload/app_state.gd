@@ -17,8 +17,8 @@ extends Node
 enum State { BOOT, MAIN_MENU, SETTINGS, BRIEFING, PLAYING, PAUSED, RESULT }
 
 ## 版本号。主菜单与 HUD 角标都读它，改版本只改这一处
-const VERSION := "0.4.0"
-const BUILD_STAGE := "prototype"
+const VERSION := "0.5.0"
+const BUILD_STAGE := "斜俯视战场 · 离线演练"
 
 ## 从主菜单点"开始游戏"之后，把相机推近一档，看完战前简报再交给玩家
 const PREFERRED_MENU_ZOOM := 1.15

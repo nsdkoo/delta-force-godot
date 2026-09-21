@@ -36,6 +36,10 @@ func _ready() -> void:
 	strafe_phase = randf() * TAU
 
 func _physics_process(delta: float) -> void:
+	if not MatchState.match_active:
+		if unit != null:
+			unit.move_dir = Vector2.ZERO
+		return
 	if unit == null or not is_instance_valid(unit) or not unit.alive:
 		return
 	# 倒地的人不做决策，也不被指挥（由流血计时与救援者决定命运）
@@ -98,7 +102,7 @@ func _think() -> void:
 		var order := _current_order()
 		if order != Vector2.INF:
 			var dist := my_pos.distance_to(order)
-			state = State.HOLD if dist < 160.0 else State.ADVANCE
+			state = State.HOLD if dist < 85.0 else State.ADVANCE
 		else:
 			state = State.ADVANCE
 	# --- 重算路径 ---
@@ -234,13 +238,16 @@ func _act_engage(delta: float) -> void:
 		move -= to_target.normalized()
 	var perp := Vector2(-to_target.y, to_target.x).normalized()
 	move += perp * sin(strafe_phase) * 0.9
+	var objective := _goal_position()
+	if unit.team == GameConfig.Team.GTI and unit.global_position.distance_to(objective) > 105.0:
+		move = move * 0.32 + (objective - unit.global_position).normalized() * 0.92
 	unit.move_dir = move.normalized() if move.length() > 0.01 else Vector2.ZERO
 	unit.sprinting = false
 
 func _act_hold(delta: float) -> void:
 	var goal := _goal_position()
 	var to_goal := goal - unit.global_position
-	if to_goal.length() > 120.0:
+	if to_goal.length() > 85.0:
 		_follow_path_or(goal)
 	else:
 		unit.move_dir = Vector2.ZERO

@@ -11,6 +11,7 @@ extends Node2D
 const WorldScene := preload("res://scenes/world/Jinqiu.tscn")
 const SelftestScript := preload("res://scripts/systems/selftest.gd")
 const AppShellScript := preload("res://scripts/ui/app_shell.gd")
+const BattlefieldScript := preload("res://scripts/visuals/battlefield_view.gd")
 
 var world: Node2D = null
 var battle: BattleManager = null
@@ -19,6 +20,7 @@ var player_ctrl: PlayerController = null
 var ui_root: Control = null
 var ui_layer: CanvasLayer = null
 var shell: CanvasLayer = null
+var battlefield: BattlefieldView = null
 
 var picked_op: String = "redwolf"
 var picked_spawn: int = 1
@@ -33,6 +35,10 @@ func _ready() -> void:
 	battle = BattleManager.new()
 	add_child(battle)
 	battle.setup(world)
+	world.visible = false
+	battlefield = BattlefieldScript.new()
+	add_child(battlefield)
+	battlefield.setup(world)
 	hud = HUD.new()
 	add_child(hud)
 	hud.battle = battle
@@ -378,7 +384,8 @@ func _start_match() -> void:
 		pos = GameConfig.BASE_POS[GameConfig.Team.GTI]
 	else:
 		var seg: int = clampi(MatchState.unlocked_segment, 0, GameConfig.SEGMENTS.size() - 1)
-		pos = Vector2(GameConfig.SEGMENTS[seg]["x"] - 330.0, GameConfig.BASE_POS[GameConfig.Team.GTI].y)
+		var front: Vector2 = GameConfig.CAPTURES[seg * 2]["pos"]
+		pos = world.safe_spawn(front + Vector2(-260, 130))
 	var p: Soldier = battle.spawn_player(picked_op, pos)
 	# `-- --artview`：把玩家挪到城堡/村落前，方便截王国保卫战风建筑对照
 	if OS.get_cmdline_user_args().has("--artview"):
@@ -393,7 +400,7 @@ func _start_match() -> void:
 	world.camera.limit_bottom = int(GameConfig.WORLD_SIZE.y)
 	world.camera.make_current()
 	EventBus.banner.emit("战斗开始 · 推进 " + GameConfig.CAPTURES[0]["name"], GameConfig.TEAM_COLOR[0], 3.6)
-	EventBus.feed.emit("战斗开始 · 20 v 20 指挥官模式 · 无 AI 机器人可刷分", Color("#ffd24a"))
+	EventBus.feed.emit("战斗开始 · 20 v 20 离线演练 · 其余队员由 AI 控制", Color("#ffd24a"))
 	var vk := {}
 	for v in TeamManager.vehicles:
 		if is_instance_valid(v):

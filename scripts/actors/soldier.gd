@@ -528,7 +528,9 @@ func _pick_respawn_pos() -> Vector2:
 		pos = owned[randi() % owned.size()] + Vector2(randf_range(-90, 90), randf_range(-90, 90))
 	else:
 		pos = base + Vector2(0, randf_range(-320, 320))
-	return pos.clamp(Vector2(60, 60), GameConfig.WORLD_SIZE - Vector2(60, 60))
+	pos = pos.clamp(Vector2(60, 60), GameConfig.WORLD_SIZE - Vector2(60, 60))
+	var world := get_tree().get_first_node_in_group("world_map")
+	return world.safe_spawn(pos) if world != null else pos
 
 ## 复活冷却：基础 20 秒，落点在小队长附近再减 5 秒
 func _compute_respawn_delay() -> float:

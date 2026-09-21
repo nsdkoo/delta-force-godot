@@ -115,7 +115,8 @@ func call_support(target: Vector2 = Vector2.INF) -> bool:
 		EventBus.toast.emit("阵亡状态无法呼叫支援", Color("#7f97a8"))
 		return false
 	if target == Vector2.INF:
-		target = p.get_global_mouse_position()
+		var view := get_tree().get_first_node_in_group("battlefield_view")
+		target = view.mouse_world() if view != null else p.get_global_mouse_position()
 	# 屏幕外/极限位置兜一下，避免打到世界之外
 	target = target.clamp(Vector2(80, 80), GameConfig.WORLD_SIZE - Vector2(80, 80))
 	match support_kind:

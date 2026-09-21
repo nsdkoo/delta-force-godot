@@ -37,6 +37,14 @@ func _process(delta: float) -> void:
 	refresh(delta)
 
 func refresh(delta: float) -> void:
+	if not MatchState.match_active:
+		return
+	if seg < MatchState.unlocked_segment or MatchState.is_locked(point_id):
+		own_team = GameConfig.Team.GTI
+		progress = 100.0
+		contested = false
+		_flush()
+		return
 	attackers = TeamManager.count_in_radius(global_position, radius, GameConfig.Team.GTI)
 	defenders = TeamManager.count_in_radius(global_position, radius, GameConfig.Team.HAVOC)
 	contested = attackers > 0 and defenders > 0

@@ -88,7 +88,7 @@ func _spawn_forces() -> void:
 				# 攻方从据点西侧压上，守方贴在据点东/侧翼
 				var side := -1.0 if team == GameConfig.Team.GTI else 1.0
 				pos = cap + Vector2(side * rng.randf_range(80.0, 260.0), rng.randf_range(-220.0, 220.0))
-			s.position = pos.clamp(Vector2(70, 70), GameConfig.WORLD_SIZE - Vector2(70, 70))
+			s.position = world.safe_spawn(pos.clamp(Vector2(70, 70), GameConfig.WORLD_SIZE - Vector2(70, 70)))
 			world.units_root.add_child(s)
 			var brain := Node.new()
 			brain.set_script(BotBrainScript)

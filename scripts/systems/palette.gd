@@ -71,14 +71,14 @@ const MARK_GOLD := Color("#ffc42e")
 
 # ---------------------------------------------------------------- UI
 ## 面板：暖木牌 + 金边。卡通塔防的界面几乎都是"木头/石头牌子 + 金线"
-const UI_WOOD := Color("#3a2a1c")
-const UI_WOOD_LIGHT := Color("#5b452e")
-const UI_WOOD_DARK := Color("#241a12")
-const UI_GOLD := Color("#e0a83c")
-const UI_GOLD_LIGHT := Color("#ffd97a")
-const UI_PARCHMENT := Color("#f3e4c4")
-const UI_TEXT := Color("#f6ecd8")
-const UI_TEXT_DIM := Color("#b9a68a")
+const UI_WOOD := Color("#182925")
+const UI_WOOD_LIGHT := Color("#2b4038")
+const UI_WOOD_DARK := Color("#101d1c")
+const UI_GOLD := Color("#879981")
+const UI_GOLD_LIGHT := Color("#e6c58a")
+const UI_PARCHMENT := Color("#ece1c6")
+const UI_TEXT := Color("#eee8d7")
+const UI_TEXT_DIM := Color("#a9b8aa")
 
 ## 面板样式（统一边框/圆角/内边距）
 static func panel_style(alpha: float = 0.95, border: float = 2.0) -> StyleBoxFlat:
@@ -86,7 +86,7 @@ static func panel_style(alpha: float = 0.95, border: float = 2.0) -> StyleBoxFla
 	sb.bg_color = Color(UI_WOOD.r, UI_WOOD.g, UI_WOOD.b, alpha)
 	sb.border_color = Color(UI_GOLD.r, UI_GOLD.g, UI_GOLD.b, 0.85)
 	sb.set_border_width_all(int(border))
-	sb.set_corner_radius_all(10)
+	sb.set_corner_radius_all(2)
 	sb.set_content_margin_all(16)
 	# 顶部一条高光，做出"木牌受光"的错觉
 	sb.border_width_top = int(border) + 1
@@ -98,7 +98,7 @@ static func button_style(bg: Color, border_col: Color = UI_GOLD) -> StyleBoxFlat
 	sb.bg_color = bg
 	sb.border_color = border_col
 	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(8)
+	sb.set_corner_radius_all(2)
 	sb.content_margin_left = 12
 	sb.content_margin_right = 12
 	sb.content_margin_top = 6
